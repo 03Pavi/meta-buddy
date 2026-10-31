@@ -7,7 +7,8 @@ export const MAX_SPOKEN_CHARS = 360;
  */
 export function toSpeechText(reply: string, maxChars = MAX_SPOKEN_CHARS): string {
   const plain = reply
-    .replace(/```[\s\S]*?```/g, ' ')
+    // Code is never read aloud. It is shown on the screen, so the voice only points to it.
+    .replace(/```[\s\S]*?(?:```|$)/g, ' Code is shown on the screen. ')
     .replace(/`([^`]*)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')

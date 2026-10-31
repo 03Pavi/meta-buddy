@@ -20,8 +20,12 @@ interface ModelDownloadContextValue {
   finishedCount: number;
   start: (model: LocalModel) => void;
   startSpeech: (model: VoiceModel) => void;
+  /** Runs the last download again. It resumes from the part that was already saved. */
+  retry: () => void;
   cancel: () => void;
 }
+
+type MakeJob = (onProgress: (fraction: number) => void) => ModelDownload;
 
 const ModelDownloadContext = createContext<ModelDownloadContextValue | null>(null);
 
@@ -34,9 +38,12 @@ export function ModelDownloadProvider({ children }: { children: React.ReactNode 
   const [error, setError] = useState<string | null>(null);
   const [finishedCount, setFinishedCount] = useState(0);
   const jobRef = useRef<ModelDownload | null>(null);
+  // The last download started, so Retry can run it again. A retry resumes from the saved part.
+  const lastRef = useRef<{ kind: ActiveDownload['kind']; modelId: string; makeJob: MakeJob } | null>(null);
 
-  const run = useCallback((kind: ActiveDownload['kind'], modelId: string, makeJob: (onProgress: (fraction: number) => void) => ModelDownload) => {
+  const run = useCallback((kind: ActiveDownload['kind'], modelId: string, makeJob: MakeJob) => {
     if (jobRef.current) return;
+    lastRef.current = { kind, modelId, makeJob };
     setError(null);
     setActive({ kind, modelId, progress: 0 });
     const job = makeJob(progress =>
@@ -62,13 +69,18 @@ export function ModelDownloadProvider({ children }: { children: React.ReactNode 
     [run],
   );
 
+  const retry = useCallback(() => {
+    const last = lastRef.current;
+    if (last) run(last.kind, last.modelId, last.makeJob);
+  }, [run]);
+
   const cancel = useCallback(() => {
     jobRef.current?.cancel();
   }, []);
 
   const value = useMemo(
-    () => ({ active, error, finishedCount, start, startSpeech, cancel }),
-    [active, error, finishedCount, start, startSpeech, cancel],
+    () => ({ active, error, finishedCount, start, startSpeech, retry, cancel }),
+    [active, error, finishedCount, start, startSpeech, retry, cancel],
   );
 
   return <ModelDownloadContext.Provider value={value}>{children}</ModelDownloadContext.Provider>;

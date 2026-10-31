@@ -46,6 +46,9 @@ export async function requestModelStorageAccess(hasAccess: () => Promise<boolean
     );
   }
   if (await hasAccess()) return true;
-  await Linking.sendIntent(ALL_FILES_ACCESS_ACTION, [{ key: 'package', value: 'com.buddy' }]);
+  // Some phones refuse the all-files screen. Buddy's own settings page is the fallback, and always opens.
+  await Linking.sendIntent(ALL_FILES_ACCESS_ACTION, [{ key: 'package', value: 'com.buddy' }]).catch(() =>
+    Linking.openSettings(),
+  );
   return false;
 }

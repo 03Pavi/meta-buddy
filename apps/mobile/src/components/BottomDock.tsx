@@ -17,11 +17,16 @@ const TABS: Array<{ name: DockTab; label: string }> = [
 const DOCK_MARGIN = spacing.lg;
 const DOCK_PADDING = 6;
 const DOCK_HEIGHT = 60;
+/** How long the highlight takes to reach the tapped tab before the screen changes. */
+const SLIDE_MS = 260;
 
 /** Space a screen should leave at its bottom so content is not hidden behind the dock. */
 export const DOCK_SPACE = DOCK_HEIGHT + spacing.lg * 2;
 
-/** The bottom dock shown on the three main screens. Its indicator slides to the active tab. */
+/**
+ * The bottom dock shown on the three main screens. Tapping a tab first slides the highlight to it, then opens the
+ * screen, so the movement is visible. The tapped tab also presses in and springs back.
+ */
 export function BottomDock({ active }: { active: DockTab }) {
   const palette = usePalette();
   const insets = useSafeAreaInsets();
@@ -30,16 +35,25 @@ export function BottomDock({ active }: { active: DockTab }) {
   const tabWidth = (width - DOCK_MARGIN * 2 - DOCK_PADDING * 2) / TABS.length;
   const activeIndex = TABS.findIndex(tab => tab.name === active);
   const slide = useRef(new Animated.Value(activeIndex)).current;
+  const pendingRef = useRef<DockTab | null>(null);
 
   useEffect(() => {
-    Animated.spring(slide, {
-      toValue: activeIndex,
-      damping: 18,
-      stiffness: 200,
-      mass: 0.9,
-      useNativeDriver: true,
-    }).start();
+    // Keeps the highlight in place when the screen first opens on this tab.
+    slide.setValue(activeIndex);
   }, [activeIndex, slide]);
+
+  const go = (tab: DockTab, index: number) => {
+    if (tab === active || pendingRef.current) return;
+    pendingRef.current = tab;
+    Animated.timing(slide, {
+      toValue: index,
+      duration: SLIDE_MS,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      pendingRef.current = null;
+      if (finished) navigation.navigate(tab);
+    });
+  };
 
   return (
     <View pointerEvents="box-none" style={[styles.wrap, { bottom: insets.bottom + spacing.md }]}>
@@ -61,32 +75,71 @@ export function BottomDock({ active }: { active: DockTab }) {
             },
           ]}
         />
-        {TABS.map(tab => {
-          const isActive = tab.name === active;
-          return (
-            <Pressable
-              key={tab.name}
-              onPress={() => {
-                if (!isActive) navigation.navigate(tab.name);
-              }}
-              accessibilityRole="tab"
-              accessibilityLabel={tab.label}
-              accessibilityState={{ selected: isActive }}
-              style={styles.tab}
-            >
-              <Text
-                style={[
-                  styles.tabLabel,
-                  { color: isActive ? palette.accent : palette.mutedText, fontWeight: isActive ? '700' : '500' },
-                ]}
-              >
-                {tab.label}
-              </Text>
-            </Pressable>
-          );
-        })}
+        {TABS.map((tab, index) => (
+          <DockTabItem
+            key={tab.name}
+            label={tab.label}
+            isActive={tab.name === active}
+            onPress={() => go(tab.name, index)}
+          />
+        ))}
       </View>
     </View>
+  );
+}
+
+/** One tab: presses in when tapped, and grows slightly with a dot underneath when it is the current screen. */
+function DockTabItem({ label, isActive, onPress }: { label: string; isActive: boolean; onPress: () => void }) {
+  const palette = usePalette();
+  const press = useRef(new Animated.Value(1)).current;
+  const emphasis = useRef(new Animated.Value(isActive ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.spring(emphasis, {
+      toValue: isActive ? 1 : 0,
+      damping: 14,
+      stiffness: 220,
+      useNativeDriver: true,
+    }).start();
+  }, [isActive, emphasis]);
+
+  const springTo = (value: number) =>
+    Animated.spring(press, { toValue: value, damping: 12, stiffness: 300, useNativeDriver: true }).start();
+
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={() => springTo(0.92)}
+      onPressOut={() => springTo(1)}
+      accessibilityRole="tab"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: isActive }}
+      style={styles.tab}
+    >
+      <Animated.View
+        style={[
+          styles.tabInner,
+          {
+            transform: [
+              { scale: press },
+              { scale: emphasis.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] }) },
+            ],
+          },
+        ]}
+      >
+        <Text style={[styles.tabLabel, { color: isActive ? palette.accent : palette.mutedText }]}>{label}</Text>
+        <Animated.View
+          style={[
+            styles.dot,
+            {
+              backgroundColor: palette.accent,
+              opacity: emphasis,
+              transform: [{ scale: emphasis }],
+            },
+          ]}
+        />
+      </Animated.View>
+    </Pressable>
   );
 }
 
@@ -122,7 +175,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  tabInner: { alignItems: 'center', gap: 4 },
   tabLabel: {
     fontSize: 14,
   },
+  dot: { width: 4, height: 4, borderRadius: 2 },
 });

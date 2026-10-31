@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Text } from '../components/AppText';
@@ -54,6 +54,24 @@ export function GlassesScreen(_props: Props) {
   const connection = connectionSummary(state);
   const sessionConnected = state.sessionState === 'STARTED';
   const canConnect = state.registration === 'REGISTERED' && !state.busy;
+  const [scanning, setScanning] = useState(false);
+  const [scanMessage, setScanMessage] = useState<string | null>(null);
+
+  const scanForGlasses = async () => {
+    setScanning(true);
+    setScanMessage('Searching for nearby glasses…');
+    const result = await actions.scan();
+    setScanning(false);
+    setScanMessage(
+      result === 'connected'
+        ? 'Glasses found and connected.'
+        : result === 'not_registered'
+          ? 'Register with Meta AI first (button below), then scan again.'
+          : result === 'unavailable'
+            ? 'Glasses support is not available in this build.'
+            : 'No glasses found nearby. Turn them on, keep them close, and scan again.',
+    );
+  };
 
   return (
     <ScrollView
@@ -70,6 +88,23 @@ export function GlassesScreen(_props: Props) {
           onDismiss={actions.clearError}
         />
       ) : null}
+
+      <Card title="Find glasses">
+        <Text style={[styles.scanHint, { color: palette.mutedText }]}>
+          Scans for about 16 seconds. If your Meta glasses are on and nearby, Buddy connects to them.
+        </Text>
+        <Button
+          label={scanning ? 'Scanning…' : 'Scan for nearby glasses'}
+          variant="primary"
+          onPress={scanForGlasses}
+          disabled={scanning || !isGlassesModuleAvailable}
+        />
+        {scanMessage ? (
+          <Text style={[styles.scanHint, { color: palette.text }]} accessibilityLiveRegion="polite">
+            {scanMessage}
+          </Text>
+        ) : null}
+      </Card>
 
       <Card title="Connection">
         <KeyValueRow
@@ -224,6 +259,7 @@ function PermissionRow({
 }
 
 const styles = StyleSheet.create({
+  scanHint: { fontSize: 13, lineHeight: 18 },
   content: { padding: spacing.lg, gap: spacing.lg },
   hint: { fontSize: 13, lineHeight: 18 },
   footnote: { fontSize: 13, lineHeight: 18 },

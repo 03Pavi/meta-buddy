@@ -1,25 +1,35 @@
-{
-  "expo": {
-    "name": "Buddy",
-    "slug": "pavi-assistant",
-    "version": "0.1.0",
-    "orientation": "portrait",
-    "scheme": "buddy",
-    "newArchEnabled": true,
-    "userInterfaceStyle": "automatic",
-    "android": {
-      "package": "com.buddy",
-      "versionCode": 1,
-      "permissions": [
-        "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.MANAGE_EXTERNAL_STORAGE"
-      ]
-    },
-    "plugins": [
-      "./plugins/withPaviAndroid",
-      "expo-build-properties"
-    ]
-  }
+﻿{
+    "expo":  {
+                 "name":  "Buddy",
+                 "slug":  "pavi-assistant",
+                 "version":  "0.1.0",
+                 "orientation":  "portrait",
+                 "scheme":  "buddy",
+                 "newArchEnabled":  true,
+                 "userInterfaceStyle":  "automatic",
+                 "icon":  "./assets/icon.png",
+                 "splash":  {
+                                "image":  "./assets/splash.png",
+                                "resizeMode":  "contain",
+                                "backgroundColor":  "#000000"
+                            },
+                 "android":  {
+                                 "package":  "com.buddy",
+                                 "adaptiveIcon":  {
+                                                      "foregroundImage":  "./assets/adaptive-icon.png",
+                                                      "backgroundColor":  "#0A0C0F"
+                                                  },
+                                 "versionCode":  1,
+                                 "permissions":  [
+                                                     "android.permission.BLUETOOTH",
+                                                     "android.permission.BLUETOOTH_CONNECT",
+                                                     "android.permission.RECORD_AUDIO",
+                                                     "android.permission.MANAGE_EXTERNAL_STORAGE"
+                                                 ]
+                             },
+                 "plugins":  [
+                                 "./plugins/withPaviAndroid",
+                                 "expo-build-properties"
+                             ]
+             }
 }

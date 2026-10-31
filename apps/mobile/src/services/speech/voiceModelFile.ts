@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import type RNFSApi from 'react-native-fs';
+import { resumableDownload, savedBytes, type ResumableDownload } from '../download/resumableDownload';
 import { modelStorageReady, type ModelDownload } from '../models/modelFile';
 import { SHARED_VOICE_DIRECTORY, voiceModelPath, type VoiceModel } from './voiceModels';
 
@@ -23,46 +24,31 @@ export async function isVoiceModelReady(model: VoiceModel): Promise<boolean> {
   }
 }
 
+/** Share of a speech model's zip already saved, from 0 to 1. Used to offer Resume. */
+export async function partialVoiceModelProgress(model: VoiceModel): Promise<number> {
+  if (Platform.OS !== 'android') return 0;
+  return (await savedBytes(`${SHARED_VOICE_DIRECTORY}/${model.folderName}.zip.part`)) / model.sizeBytes;
+}
+
 /**
- * Downloads the speech model zip to a partial file, checks its exact size, unpacks it into the shared voice
- * folder and removes the zip. The partial file never replaces a finished model.
+ * Downloads the speech model zip in pieces, keeping what was saved if it stops. The finished zip is unpacked into
+ * the shared voice folder and removed.
  */
 export function downloadVoiceModel(model: VoiceModel, onProgress: (fraction: number) => void): ModelDownload {
   const zip = `${SHARED_VOICE_DIRECTORY}/${model.folderName}.zip`;
   const partial = `${zip}.part`;
-  let jobId: number | undefined;
   let cancelled = false;
+  let inner: ResumableDownload | null = null;
 
   const done = (async () => {
     if (!(await modelStorageReady())) {
       throw new Error('Allow storage access for Buddy first, then try the download again.');
     }
-    await RNFS().mkdir(SHARED_VOICE_DIRECTORY);
-    await RNFS().unlink(partial).catch(() => undefined);
-
-    const download = RNFS().downloadFile({
-      fromUrl: model.url,
-      toFile: partial,
-      background: true,
-      progressDivider: 1,
-      begin: result => {
-        jobId = result.jobId;
-      },
-      progress: result => {
-        if (result.contentLength > 0) onProgress(result.bytesWritten / result.contentLength);
-      },
-    });
-    jobId = download.jobId;
-    const result = await download.promise;
     if (cancelled) throw new Error('Download cancelled');
-    if (result.statusCode !== 200) {
-      await RNFS().unlink(partial).catch(() => undefined);
-      throw new Error(`Download failed (HTTP ${result.statusCode}). Check your internet connection and try again.`);
-    }
-    if (Number((await RNFS().stat(partial)).size) !== model.sizeBytes) {
-      await RNFS().unlink(partial).catch(() => undefined);
-      throw new Error('The speech model download is incomplete. Try again.');
-    }
+    await RNFS().mkdir(SHARED_VOICE_DIRECTORY);
+
+    inner = resumableDownload({ url: model.url, partialPath: partial, expectedBytes: model.sizeBytes, onProgress });
+    await inner.done;
 
     await RNFS().unlink(zip).catch(() => undefined);
     await RNFS().moveFile(partial, zip);
@@ -77,7 +63,7 @@ export function downloadVoiceModel(model: VoiceModel, onProgress: (fraction: num
     done,
     cancel: () => {
       cancelled = true;
-      if (jobId !== undefined) RNFS().stopDownload(jobId);
+      inner?.cancel();
     },
   };
 }

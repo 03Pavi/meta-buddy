@@ -18,7 +18,12 @@ export interface AppSettings {
   voiceInvocations: boolean;
   cameraQuality: 'LOW' | 'MEDIUM' | 'HIGH';
   cameraFrameRate: 15 | 24;
+  /** Speed of spoken replies. 1 is normal speed. */
+  speechRate: SpeechRate;
 }
+
+export const SPEECH_RATES = [0.75, 1, 1.25, 1.5] as const;
+export type SpeechRate = (typeof SPEECH_RATES)[number];
 
 export const DEFAULT_SETTINGS: AppSettings = {
   modelId: DEFAULT_MODEL_ID,
@@ -31,6 +36,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   voiceInvocations: false,
   cameraQuality: 'MEDIUM',
   cameraFrameRate: 15,
+  speechRate: 1,
 };
 
 const STORAGE_KEY = 'pavi.settings.v1';
@@ -68,6 +74,7 @@ export function parseSettings(raw: unknown): AppSettings {
       v => v === 'LOW' || v === 'MEDIUM' || v === 'HIGH',
     ),
     cameraFrameRate: pick('cameraFrameRate', v => v === 15 || v === 24),
+    speechRate: pick('speechRate', v => SPEECH_RATES.some(rate => rate === v)),
   };
 }
 

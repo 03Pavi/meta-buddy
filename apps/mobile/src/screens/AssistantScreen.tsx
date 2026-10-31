@@ -14,8 +14,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '../components/AppText';
+import * as Clipboard from 'expo-clipboard';
+import Markdown from 'react-native-markdown-display';
 import { Notice, StatusPill } from '../components/ui';
-import { radius, spacing, usePalette } from '../components/theme';
+import { fonts, radius, spacing, usePalette } from '../components/theme';
 import {
   isBusy,
   type AssistantPhase,
@@ -98,6 +100,10 @@ export function AssistantScreen({ navigation }: Props) {
   const connection = connectionSummary(glasses);
   const speechDisabled = settings.speechInput === 'text';
   const hasText = draft.trim().length > 0;
+  // While the model writes, the reply so far is shown as a last message that grows as each token arrives.
+  const listData: TranscriptMessage[] = state.streamText
+    ? [...state.messages, { id: 'streaming', role: 'assistant', text: state.streamText, createdAt: Date.now() }]
+    : state.messages;
 
   useEffect(() => {
     if (state.messages.length > 0) {
@@ -206,7 +212,7 @@ export function AssistantScreen({ navigation }: Props) {
         </View>
       ) : null}
 
-      {state.messages.length === 0 ? (
+      {state.messages.length === 0 && !state.streamText ? (
         <View style={styles.empty}>
           <Text style={[styles.greeting, { color: palette.text }]}>What's on your mind?</Text>
           <Text style={[styles.greetingBody, { color: palette.mutedText }]}>
@@ -226,10 +232,20 @@ export function AssistantScreen({ navigation }: Props) {
       ) : (
         <FlatList
           ref={listRef}
-          data={state.messages}
+          data={listData}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.transcript}
-          renderItem={({ item }) => <MessageBubble message={item} />}
+          renderItem={({ item }) => {
+            const last = state.messages[state.messages.length - 1];
+            const canContinue = !busy && item.id === last?.id && !!last?.truncated;
+            return (
+              <MessageBubble
+                message={item}
+                showContinue={canContinue}
+                onContinue={() => actions.continueReply()}
+              />
+            );
+          }}
         />
       )}
 
@@ -487,7 +503,120 @@ function ComposerButton({
   );
 }
 
-function MessageBubble({ message }: { message: TranscriptMessage }) {
+type ReplyPart = { kind: 'text' | 'code'; value: string; language: string };
+
+/** Splits a reply into text and code blocks. A block that is still being written counts as code up to its end. */
+function splitReply(text: string): ReplyPart[] {
+  const parts: ReplyPart[] = [];
+  const pattern = /```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g;
+  let index = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match[0].length === 0) {
+      pattern.lastIndex += 1;
+      continue;
+    }
+    if (match.index > index) parts.push({ kind: 'text', value: text.slice(index, match.index), language: '' });
+    parts.push({ kind: 'code', value: match[2].replace(/\n$/, ''), language: match[1].trim() });
+    index = pattern.lastIndex;
+  }
+  if (index < text.length) parts.push({ kind: 'text', value: text.slice(index), language: '' });
+  return parts;
+}
+
+/** A reply: markdown for the text, and a block with a Copy button for each piece of code. */
+function AssistantText({ text }: { text: string }) {
+  const palette = usePalette();
+  return (
+    <View style={styles.replyStack}>
+      {splitReply(text).map((part, index) =>
+        part.kind === 'code' ? (
+          <CodeBlock key={index} code={part.value} language={part.language} />
+        ) : part.value.trim() ? (
+          <Markdown key={index} style={markdownStyle(palette)}>
+            {part.value}
+          </Markdown>
+        ) : null,
+      )}
+    </View>
+  );
+}
+
+function CodeBlock({ code, language }: { code: string; language: string }) {
+  const palette = usePalette();
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await Clipboard.setStringAsync(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <View style={[styles.codeBlock, { backgroundColor: palette.neutralSurface, borderColor: palette.border }]}>
+      <View style={styles.codeHeader}>
+        <Text style={[styles.codeLanguage, { color: palette.mutedText }]}>{language || 'code'}</Text>
+        <Pressable
+          onPress={copy}
+          accessibilityRole="button"
+          accessibilityLabel={copied ? 'Code copied' : 'Copy code'}
+          style={[styles.copyButton, { borderColor: palette.border }]}
+        >
+          <Text style={[styles.copyLabel, { color: palette.accent }]}>{copied ? 'Copied' : 'Copy'}</Text>
+        </Pressable>
+      </View>
+      <Text selectable style={[styles.codeText, { color: palette.text }]}>
+        {code}
+      </Text>
+    </View>
+  );
+}
+
+/** Markdown styles for assistant replies, using the app's theme colours and fonts. */
+function markdownStyle(palette: ReturnType<typeof usePalette>) {
+  return {
+    body: { color: palette.text, fontFamily: fonts.regular, fontSize: 16, lineHeight: 23 },
+    paragraph: { marginTop: 0, marginBottom: spacing.sm },
+    heading1: { color: palette.text, fontFamily: fonts.displayBold, fontSize: 22, marginBottom: spacing.xs },
+    heading2: { color: palette.text, fontFamily: fonts.displayBold, fontSize: 19, marginBottom: spacing.xs },
+    heading3: { color: palette.text, fontFamily: fonts.display, fontSize: 17, marginBottom: spacing.xs },
+    strong: { fontFamily: fonts.bold },
+    bullet_list: { marginBottom: spacing.sm },
+    code_inline: {
+      color: palette.accent,
+      backgroundColor: palette.neutralSurface,
+      fontFamily: 'monospace',
+      fontSize: 14,
+      paddingHorizontal: 4,
+      borderRadius: 4,
+    },
+    fence: {
+      color: palette.text,
+      backgroundColor: palette.neutralSurface,
+      borderColor: palette.border,
+      fontFamily: 'monospace',
+      fontSize: 13,
+      padding: spacing.md,
+      borderRadius: radius.md,
+    },
+    code_block: {
+      color: palette.text,
+      backgroundColor: palette.neutralSurface,
+      fontFamily: 'monospace',
+      fontSize: 13,
+      padding: spacing.md,
+      borderRadius: radius.md,
+    },
+  } as const;
+}
+
+function MessageBubble({
+  message,
+  showContinue = false,
+  onContinue,
+}: {
+  message: TranscriptMessage;
+  showContinue?: boolean;
+  onContinue?: () => void;
+}) {
   const palette = usePalette();
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
@@ -504,20 +633,31 @@ function MessageBubble({ message }: { message: TranscriptMessage }) {
         ]}
         accessibilityLabel={`${message.role}: ${message.text}`}
       >
-        <Text
-          style={[
-            styles.bubbleText,
-            {
-              color: isUser
-                ? palette.accentText
-                : isSystem
-                  ? palette.mutedText
-                  : palette.text,
-            },
-          ]}
-        >
-          {message.text}
-        </Text>
+        {isUser || isSystem ? (
+          <Text
+            style={[
+              styles.bubbleText,
+              {
+                color: isUser ? palette.accentText : palette.mutedText,
+              },
+            ]}
+          >
+            {message.text}
+          </Text>
+        ) : (
+          // Assistant replies are markdown: headings, paragraphs, lists and code blocks.
+          <AssistantText text={message.text} />
+        )}
+        {showContinue && onContinue ? (
+          <Pressable
+            onPress={onContinue}
+            accessibilityRole="button"
+            accessibilityLabel="Continue the reply"
+            style={[styles.continueButton, { borderColor: palette.border }]}
+          >
+            <Text style={[styles.continueLabel, { color: palette.accent }]}>Continue ›</Text>
+          </Pressable>
+        ) : null}
         {message.withImage ? (
           <Text style={[styles.imageTag, { color: isUser ? palette.accentText : palette.mutedText }]}>
             With glasses photo
@@ -646,6 +786,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   composerButtonLabel: { fontSize: 15, fontWeight: '700' },
+  replyStack: { gap: spacing.sm },
+  codeBlock: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, overflow: 'hidden' },
+  codeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  codeLanguage: { fontSize: 12, fontWeight: '600' },
+  copyButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  copyLabel: { fontSize: 13, fontWeight: '600' },
+  codeText: { fontFamily: 'monospace', fontSize: 13, lineHeight: 18, padding: spacing.md },
+  continueButton: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  continueLabel: { fontSize: 13, fontWeight: '600' },
   drawerRoot: { flex: 1, flexDirection: 'row' },
   drawer: {
     width: '80%',

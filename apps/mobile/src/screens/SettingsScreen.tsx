@@ -1,11 +1,12 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import React from 'react';
-import { ScrollView, StyleSheet, Switch, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { PermissionsAndroid, Platform, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomDock, DOCK_SPACE } from '../components/BottomDock';
 import { spacing, usePalette } from '../components/theme';
 import { Text } from '../components/AppText';
-import { Button, Card } from '../components/ui';
+import { Button, Card, KeyValueRow } from '../components/ui';
+import { modelStorageReady, requestModelStorage } from '../services/models/modelFile';
 import type { SpeechInputSource } from '../services/settings/settingsStore';
 import { useAssistant } from '../state/AssistantProvider';
 import { useSettings } from '../state/SettingsProvider';
@@ -27,6 +28,23 @@ export function SettingsScreen(_props: Props) {
   const insets = useSafeAreaInsets();
   const { settings, update } = useSettings();
   const { actions } = useAssistant();
+  const [storageOk, setStorageOk] = useState<boolean | null>(null);
+  const [micOk, setMicOk] = useState<boolean | null>(null);
+
+  // Permissions are read when the screen opens, and again after each Allow or Check press.
+  const checkPermissions = () => {
+    modelStorageReady().then(setStorageOk);
+    if (Platform.OS === 'android') {
+      PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO).then(setMicOk);
+    }
+  };
+
+  useEffect(checkPermissions, []);
+
+  const allowMicrophone = async () => {
+    const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+    setMicOk(result === PermissionsAndroid.RESULTS.GRANTED);
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: palette.background }}>
@@ -34,6 +52,35 @@ export function SettingsScreen(_props: Props) {
         style={{ backgroundColor: palette.background }}
         contentContainerStyle={[styles.content, { paddingBottom: DOCK_SPACE + insets.bottom }]}
       >
+        <Card title="Permissions">
+          <KeyValueRow
+            label="Storage for models"
+            value={storageOk === true ? 'Allowed' : 'Not allowed yet'}
+            tone={storageOk === true ? 'success' : 'warning'}
+          />
+          {storageOk === true ? null : (
+            <Button
+              label="Allow storage access"
+              variant="primary"
+              onPress={() => requestModelStorage().then(() => checkPermissions())}
+            />
+          )}
+          <KeyValueRow
+            label="Microphone"
+            value={micOk === true ? 'Allowed' : 'Not allowed yet'}
+            tone={micOk === true ? 'success' : 'warning'}
+          />
+          {micOk === true ? null : (
+            <Button label="Allow microphone" variant="primary" onPress={allowMicrophone} />
+          )}
+          <Text style={[styles.hint, { color: palette.mutedText }]}>
+            Storage lets Buddy save and read models in the Download folder. On Android 11 and later, the Allow button opens
+            “Allow access to manage all files” for Buddy: switch it on, come back, and tap Allow again. The microphone is
+            used only when you ask Buddy to listen.
+          </Text>
+          <Button label="Check again" onPress={checkPermissions} />
+        </Card>
+
         <Card title="Speech input">
           <View style={styles.segmented}>
             {SPEECH_OPTIONS.map(option => (

@@ -1,10 +1,12 @@
 import type { ChatMessage } from '../types';
 
-/** System prompt for Pip, exactly as specified for this app. */
-export const PIP_SYSTEM_PROMPT =
-  "You are Pip, a friendly and helpful personal AI assistant. Keep replies concise, natural, and warm. " +
+/** System prompt for Buddy, the assistant in this app. */
+export const BUDDY_SYSTEM_PROMPT =
+  "You are Buddy, a friendly and helpful personal AI assistant. Keep replies concise, natural, and warm. " +
   "Speak in clear, conversational language. Answer the user's actual question directly. " +
-  'If you do not know something, say so.';
+  'If you do not know something, say so. ' +
+  'If asked who created or built you, say that you were created by Pavitar. Say nothing more about your creator, ' +
+  'and do not explain how you were built or which technology you run on.';
 
 /** Context window configured for the on-device model. The model reports 32k, but phones have limited memory. */
 export const LOCAL_CONTEXT_TOKENS = 4096;
@@ -29,7 +31,7 @@ export function buildLocalMessages(
   history: ChatMessage[],
   userText: string,
   budgetTokens = LOCAL_HISTORY_TOKENS,
-  systemPrompt = PIP_SYSTEM_PROMPT,
+  systemPrompt = BUDDY_SYSTEM_PROMPT,
 ): ChatMessage[] {
   const current: ChatMessage = { role: 'user', content: userText };
   let used = estimateTokens(userText);

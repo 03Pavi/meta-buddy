@@ -22,12 +22,20 @@ import {
   type PermissionKey,
 } from '../features/glasses/glassesState';
 
+/** Outcome of a scan: what the user should see next. */
+export type ScanResult = 'unavailable' | 'not_registered' | 'not_found' | 'connected';
+
+const SCAN_ATTEMPTS = 8;
+const SCAN_INTERVAL_MS = 2000;
+
 export interface GlassesActions {
   initialize: () => Promise<void>;
   register: () => Promise<void>;
   unregister: () => Promise<void>;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
+  /** Looks for nearby glasses for about 16 seconds, and connects if one is found. */
+  scan: () => Promise<ScanResult>;
   requestPermission: (permission: PermissionKey) => Promise<void>;
   startCamera: (options?: CameraOptions) => Promise<boolean>;
   stopCamera: () => Promise<void>;
@@ -151,6 +159,27 @@ export function GlassesProvider({ children }: { children: React.ReactNode }) {
             snapshot: await MetaWearables.connect(),
           });
         });
+      },
+      scan: async (): Promise<ScanResult> => {
+        if (!MetaWearables.available) return 'unavailable';
+        try {
+          for (let attempt = 0; attempt < SCAN_ATTEMPTS; attempt++) {
+            const snapshot = await MetaWearables.getSnapshot();
+            dispatch({ type: 'snapshotApplied', snapshot });
+            if (snapshot.registration !== 'REGISTERED') return 'not_registered';
+            if (snapshot.deviceCount > 0) {
+              if (snapshot.sessionState !== 'STARTED') {
+                dispatch({ type: 'snapshotApplied', snapshot: await MetaWearables.connect() });
+              }
+              return 'connected';
+            }
+            await new Promise<void>(resolve => setTimeout(resolve, SCAN_INTERVAL_MS));
+          }
+          return 'not_found';
+        } catch (error) {
+          dispatch({ type: 'errorReported', ...describeError('scan', error) });
+          return 'not_found';
+        }
       },
       disconnect: async () => {
         await run('session', async () => {

@@ -13,6 +13,8 @@ export interface TranscriptMessage {
   createdAt: number;
   /** True when the user message was sent with a camera frame. The image itself is never stored. */
   withImage?: boolean;
+  /** True when an assistant reply stopped at the length limit, so a Continue button is shown. */
+  truncated?: boolean;
 }
 
 export interface AssistantState {
@@ -31,6 +33,8 @@ export interface AssistantState {
   lastUserText?: string;
   /** Model load progress, 0 to 1, while the on-device model is loading. */
   loadProgress?: number;
+  /** The reply so far, while the model is still writing it. Cleared when the reply is complete. */
+  streamText: string;
 }
 
 export type AssistantAction =
@@ -38,6 +42,10 @@ export type AssistantAction =
   | { type: 'messageAdded'; message: TranscriptMessage }
   | { type: 'requestStarted'; requestId: string; withImage: boolean; text?: string }
   | { type: 'loadProgressChanged'; fraction?: number }
+  /** The reply text so far, from the model's token stream. */
+  | { type: 'streamChunk'; text: string }
+  /** Replaces the text of an existing reply, used when a truncated reply is continued in place. */
+  | { type: 'replyExtended'; id: string; text: string; truncated: boolean }
   | {
       type: 'requestFinished';
       requestId: string;
@@ -61,6 +69,7 @@ export const initialAssistantState: AssistantState = {
   draft: '',
   contextReset: false,
   cameraActive: false,
+  streamText: '',
 };
 
 export function assistantReducer(
@@ -80,9 +89,19 @@ export function assistantReducer(
         lastUserText: action.text ?? state.lastUserText,
         lastError: undefined,
         draft: '',
+        streamText: '',
       };
     case 'loadProgressChanged':
       return { ...state, loadProgress: action.fraction };
+    case 'streamChunk':
+      return { ...state, streamText: action.text };
+    case 'replyExtended':
+      return {
+        ...state,
+        messages: state.messages.map(message =>
+          message.id === action.id ? { ...message, text: action.text, truncated: action.truncated } : message,
+        ),
+      };
     case 'requestFinished':
       if (state.pendingRequestId !== action.requestId) return state;
       return {
@@ -92,6 +111,7 @@ export function assistantReducer(
         conversationId: action.conversationId,
         contextReset: action.contextReset,
         messages: [...state.messages, action.reply],
+        streamText: '',
       };
     case 'requestFailed':
       if (state.pendingRequestId !== action.requestId) return state;
@@ -100,10 +120,11 @@ export function assistantReducer(
         phase: 'error',
         pendingRequestId: undefined,
         lastError: action.message,
+        streamText: '',
       };
     case 'requestCancelled':
       if (state.pendingRequestId !== action.requestId) return state;
-      return { ...state, phase: 'idle', pendingRequestId: undefined };
+      return { ...state, phase: 'idle', pendingRequestId: undefined, streamText: '' };
     case 'failed':
       return { ...state, phase: 'error', lastError: action.message };
     case 'phaseChanged':

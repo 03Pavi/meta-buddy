@@ -23,7 +23,8 @@ export interface GenerateRequest {
 export interface GenerateResult {
   text: string;
   model: string;
-
+  /** True when the reply stopped at the token limit and more could be written. */
+  truncated?: boolean;
 }
 
 export interface AIProvider {

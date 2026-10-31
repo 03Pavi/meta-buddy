@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import type RNFSApi from 'react-native-fs';
 import { DEFAULT_MODEL_ID, findModel, LOCAL_MODELS, type LocalModel } from './catalog';
+import { resumableDownload, savedBytes, type ResumableDownload } from '../download/resumableDownload';
 import { hasModelStorageAccess, requestModelStorageAccess, SHARED_MODELS_DIRECTORY } from './storage';
 
 // Loaded on first use. On the web there is no file system, so the native module is never touched there.
@@ -24,6 +25,17 @@ export function modelStorageReady(): Promise<boolean> {
     async path => {
       await RNFS().mkdir(SHARED_MODELS_DIRECTORY);
       await RNFS().writeFile(path, 'ok', 'utf8');
+      // Reading the file back proves the app can read the folder, not only write to it.
+      if ((await RNFS().readFile(path, 'utf8')) !== 'ok') throw new Error('The folder cannot be read back.');
+      // A model saved earlier belongs to another app ID. Reading it proves the app can read files it did not write.
+      // Same steps as checkModelFile: look up the size, then read the start of each model file that is there.
+      for (const model of LOCAL_MODELS) {
+        const modelPath = defaultModelPath(model);
+        if (await RNFS().exists(modelPath)) {
+          await RNFS().stat(modelPath);
+          await RNFS().read(modelPath, 4, 0, 'ascii');
+        }
+      }
     },
     path => RNFS().unlink(path),
   );
@@ -116,7 +128,12 @@ export async function checkModelFile(
     }
     return { path, exists: true, sizeBytes: size, valid: true };
   } catch {
-    return { path, exists: false, valid: false, problem: 'The model location could not be read.' };
+    return {
+      path,
+      exists: false,
+      valid: false,
+      problem: 'Buddy cannot read this file. Allow storage access in Settings → Permissions, then tap Check again.',
+    };
   }
 }
 
@@ -130,38 +147,31 @@ export interface ModelDownload {
  * Downloads a model into the default location. Writes to a .part file first, so a cancelled or failed download
  * never leaves something that looks like a model. The file is moved into place only after the GGUF check passes.
  */
+/**
+ * Downloads a model into the default location in pieces, and keeps what was saved if it stops. Starting again
+ * continues from the saved part. The file is moved into place only after the GGUF check passes.
+ */
 export function downloadModel(model: LocalModel, onProgress: (fraction: number) => void): ModelDownload {
   const target = defaultModelPath(model);
   const partial = `${target}.part`;
-  let jobId: number | undefined;
   let cancelled = false;
+  let inner: ResumableDownload | null = null;
 
   const done = (async () => {
     if (!(await modelStorageReady())) {
       throw new Error('Allow storage access for Buddy first, then try the download again.');
     }
-    await RNFS().mkdir(SHARED_MODELS_DIRECTORY);
-    await RNFS().unlink(partial).catch(() => undefined);
-
-    const download = RNFS().downloadFile({
-      fromUrl: model.url,
-      toFile: partial,
-      background: true,
-      progressDivider: 1,
-      begin: result => {
-        jobId = result.jobId;
-      },
-      progress: result => {
-        if (result.contentLength > 0) onProgress(result.bytesWritten / result.contentLength);
-      },
-    });
-    jobId = download.jobId;
-    const result = await download.promise;
     if (cancelled) throw new Error('Download cancelled');
-    if (result.statusCode !== 200) {
+    await RNFS().mkdir(SHARED_MODELS_DIRECTORY);
+
+    // The model is already complete: drop any leftover partial copy and do not download it again.
+    if ((await modelOnPhone(model)) === 'yes') {
       await RNFS().unlink(partial).catch(() => undefined);
-      throw new Error(`Download failed (HTTP ${result.statusCode}). Check your internet connection and try again.`);
+      return;
     }
+
+    inner = resumableDownload({ url: model.url, partialPath: partial, expectedBytes: model.sizeBytes, onProgress });
+    await inner.done;
 
     const header = await RNFS().read(partial, 4, 0, 'ascii');
     if (!hasGgufHeader(header)) {
@@ -176,7 +186,55 @@ export function downloadModel(model: LocalModel, onProgress: (fraction: number) 
     done,
     cancel: () => {
       cancelled = true;
-      if (jobId !== undefined) RNFS().stopDownload(jobId);
+      inner?.cancel();
     },
   };
+}
+
+/**
+ * Whether a model is on the phone, judged by its file size. Size alone is enough here, so a file that cannot be
+ * read still counts as present. 'needs-access' means the app cannot see the file at all, so storage access is needed.
+ */
+export async function modelOnPhone(model: LocalModel): Promise<'yes' | 'no' | 'needs-access'> {
+  if (Platform.OS !== 'android') return 'no';
+  const path = defaultModelPath(model);
+  try {
+    if (!(await RNFS().exists(path))) return 'no';
+    return Number((await RNFS().stat(path)).size) === model.sizeBytes ? 'yes' : 'no';
+  } catch {
+    return 'needs-access';
+  }
+}
+
+/** Creates the shared models folder, so it exists before the first download or model check. */
+export async function ensureModelFolder(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  await RNFS().mkdir(SHARED_MODELS_DIRECTORY).catch(() => undefined);
+}
+
+/** Places a model file is commonly found, in the order Buddy suggests them. The first one is the default. */
+export function suggestedModelLocations(model: LocalModel): string[] {
+  if (Platform.OS !== 'android') return [];
+  return [
+    defaultModelPath(model),
+    `${RNFS().ExternalDirectoryPath}/models/${model.fileName}`,
+    `/storage/emulated/0/Documents/Buddy/models/${model.fileName}`,
+  ];
+}
+
+/** Whether the model file is at a given path: 'yes', 'no', or 'needs-access' when Buddy cannot see the path. */
+export async function modelAtPath(path: string, model: LocalModel): Promise<'yes' | 'no' | 'needs-access'> {
+  try {
+    if (!(await RNFS().exists(path))) return 'no';
+    return Number((await RNFS().stat(path)).size) === model.sizeBytes ? 'yes' : 'no';
+  } catch {
+    return 'needs-access';
+  }
+}
+
+/** Share of a model already saved in its partial file, from 0 to 1. Used to offer Resume. */
+export async function partialModelProgress(model: LocalModel): Promise<number> {
+  if (Platform.OS !== 'android') return 0;
+  const partial = `${defaultModelPath(model)}.part`;
+  return (await savedBytes(partial)) / model.sizeBytes;
 }

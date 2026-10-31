@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
 import { MetaWearables, type MetaWearablesEvent } from '../../modules/meta-wearables/src';
 import { GemmaProvider } from '../providers/ai/GemmaProvider';
+import type { ChatMessage } from '../providers/types';
 import { buildLocalMessages } from '../providers/ai/promptBudget';
 import { DeviceSpeechRecognition } from '../providers/speech/DeviceSpeechRecognition';
 import { OfflineSpeechRecognition } from '../providers/speech/OfflineSpeechRecognition';
@@ -37,6 +38,8 @@ export interface AssistantActions {
   stopAll: () => Promise<void>;
   clearConversation: () => Promise<void>;
   clearError: () => void;
+  /** Asks the model to carry on from the end of the last reply. */
+  continueReply: () => Promise<void>;
   newChat: () => Promise<void>;
   openChat: (id: string) => Promise<void>;
   removeChat: (id: string) => Promise<void>;
@@ -68,6 +71,15 @@ function makeMessage(role: TranscriptMessage['role'], text: string): TranscriptM
   return { id: newId(), role, text, createdAt: Date.now() };
 }
 
+/** Joins a continued reply to the text before it, so a word cut at the limit is not split by a space. */
+function joinText(previous: string, addition: string): string {
+  const next = addition.replace(/^\s+/, '');
+  if (!next) return previous;
+  if (/\s$/.test(previous)) return previous + next;
+  if (/[A-Za-z]$/.test(previous) && /^[a-z]/.test(next)) return previous + next;
+  return `${previous} ${next}`;
+}
+
 function friendlyError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return 'Something went wrong.';
@@ -93,6 +105,8 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const inFlightRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const speechOutputRef = useRef<{ utteranceId: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  // The reply being spoken as it is written: how much of it has been queued, and whether speech has started.
+  const speechStreamRef = useRef<{ utteranceId: string; index: number; spoken: boolean } | null>(null);
   const reopenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listeningSourceRef = useRef<'glasses' | 'phone' | null>(null);
   const transcriptLoadedRef = useRef(false);
@@ -113,7 +127,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     }
     return offlineSpeechRef.current;
   }, []);
-  const ttsRef = useRef(new DeviceTextToSpeech(SPOKEN_LOCALE));
+  const ttsRef = useRef(new DeviceTextToSpeech(SPOKEN_LOCALE, () => settingsRef.current.speechRate));
 
   // The on-device model is recreated only when its file path changes. Loading happens on first use.
   const gemmaRef = useRef<GemmaProvider | null>(null);
@@ -200,40 +214,68 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     }, ECHO_GUARD_MS);
   }, [clearReopenTimer]);
 
-  const speakReply = useCallback(
-    (text: string) => {
-      const spoken = settingsRef.current.spokenReplies ? toSpeechText(text) : '';
-      if (!spoken) {
+  /**
+   * Starts speaking a reply as it is written. Each sentence is queued as soon as the model finishes it, so speech
+   * begins before the whole reply is ready.
+   */
+  const startSpeechStream = useCallback(() => {
+    if (!settingsRef.current.spokenReplies) {
+      speechStreamRef.current = null;
+      return;
+    }
+    clearSpeechTimer();
+    const utteranceId = newId();
+    speechStreamRef.current = { utteranceId, index: 0, spoken: false };
+    speechOutputRef.current = {
+      utteranceId,
+      timer: setTimeout(() => {
+        clearSpeechTimer();
+        dispatch({ type: 'phaseChanged', phase: 'idle' });
+      }, SPEECH_OUTPUT_FALLBACK_MS),
+    };
+    ttsRef.current.beginStream({
+      onDone: () => {
+        if (speechStreamRef.current?.utteranceId !== utteranceId) return;
+        speechStreamRef.current = null;
+        clearSpeechTimer();
         dispatch({ type: 'phaseChanged', phase: 'idle' });
         scheduleListenAfterReply();
-        return;
-      }
-      clearSpeechTimer();
-      const utteranceId = newId();
-      speechOutputRef.current = {
-        utteranceId,
-        timer: setTimeout(() => {
-          clearSpeechTimer();
-          dispatch({ type: 'phaseChanged', phase: 'idle' });
-        }, SPEECH_OUTPUT_FALLBACK_MS),
-      };
+      },
+      onError: (message) => {
+        if (speechStreamRef.current?.utteranceId !== utteranceId) return;
+        speechStreamRef.current = null;
+        clearSpeechTimer();
+        dispatch({ type: 'failed', message: `Spoken reply failed: ${message}` });
+      },
+    });
+  }, [clearSpeechTimer, scheduleListenAfterReply]);
+
+  /**
+   * Queues the sentences of the reply that are complete. `raw` is the whole reply so far. Text after the last
+   * sentence end waits for more, unless `final` is set, which speaks whatever is left.
+   */
+  const feedSpeech = useCallback((raw: string, final: boolean) => {
+    const session = speechStreamRef.current;
+    if (!session) return;
+    const rest = raw.slice(session.index);
+    let cut = final ? rest.length : 0;
+    // Wait for a code block to close, so code is not split into sentences and read out.
+    const insideCode = (raw.match(/```/g) ?? []).length % 2 === 1;
+    if (!final && insideCode) return;
+    if (!final) {
+      const sentence = /^[\s\S]*(?:[.!?।](?=\s|$)|\n)/.exec(rest);
+      cut = sentence ? sentence[0].length : 0;
+    }
+    if (cut <= 0) return;
+    session.index += cut;
+    const chunk = toSpeechText(rest.slice(0, cut)).trim();
+    if (!chunk) return;
+    if (!session.spoken) {
+      session.spoken = true;
       dispatch({ type: 'phaseChanged', phase: 'speaking' });
-      ttsRef.current.speak(spoken, {
-        onDone: () => {
-          if (speechOutputRef.current?.utteranceId !== utteranceId) return;
-          clearSpeechTimer();
-          dispatch({ type: 'phaseChanged', phase: 'idle' });
-          scheduleListenAfterReply();
-        },
-        onError: (message) => {
-          if (speechOutputRef.current?.utteranceId !== utteranceId) return;
-          clearSpeechTimer();
-          dispatch({ type: 'failed', message: `Spoken reply failed: ${message}` });
-        },
-      });
-    },
-    [clearSpeechTimer, scheduleListenAfterReply],
-  );
+    }
+    ttsRef.current.speakChunk(chunk);
+  }, []);
 
   // endregion
 
@@ -287,16 +329,33 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: 'loadProgressChanged', fraction: undefined });
 
         const messages = buildLocalMessages(history, text);
-        const result = await gemma.generate({ messages, maxTokens: MAX_REPLY_TOKENS, signal: controller.signal });
+        startSpeechStream();
+        const result = await gemma.generate({
+          messages,
+          maxTokens: MAX_REPLY_TOKENS,
+          signal: controller.signal,
+          // Each piece of the reply goes to the chat, and each finished sentence starts speaking.
+          onPartial: (partial) => {
+            dispatch({ type: 'streamChunk', text: partial });
+            feedSpeech(partial, false);
+          },
+        });
         dispatch({
           type: 'requestFinished',
           requestId: text,
           conversationId: stateRef.current.conversationId ?? newId(),
           contextReset: false,
-          reply: makeMessage('assistant', result.text),
+          reply: { ...makeMessage('assistant', result.text), truncated: result.truncated },
         });
-        speakReply(result.text);
+        feedSpeech(result.text, true);
+        if (speechStreamRef.current) {
+          ttsRef.current.endStream();
+        } else {
+          dispatch({ type: 'phaseChanged', phase: 'idle' });
+          scheduleListenAfterReply();
+        }
       } catch (error) {
+        speechStreamRef.current = null;
         if (controller.signal.aborted) {
           dispatch({ type: 'requestCancelled', requestId: text });
         } else {
@@ -307,7 +366,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
         inFlightRef.current = false;
       }
     },
-    [clearReopenTimer, getGemma, speakReply, stopSpeechInput, stopSpeaking],
+    [clearReopenTimer, feedSpeech, getGemma, scheduleListenAfterReply, startSpeechStream, stopSpeechInput, stopSpeaking],
   );
 
   const retry = useCallback(async () => {
@@ -316,6 +375,67 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: 'errorCleared' });
     await runTurn(text);
   }, [runTurn]);
+
+  /**
+   * Carries on a reply that stopped at the length limit. The new text is added to the same reply bubble, and the
+   * model is given the reply so far, so it continues from the end instead of starting again.
+   */
+  const continueReply = useCallback(async () => {
+    if (inFlightRef.current || isBusy(stateRef.current.phase)) return;
+    const messages = stateRef.current.messages;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'assistant' || !last.truncated) return;
+
+    inFlightRef.current = true;
+    clearReopenTimer();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const previous = last.text;
+    const history: ChatMessage[] = messages
+      .filter(message => message.role !== 'system')
+      .map(message => ({ role: message.role as 'user' | 'assistant', content: message.text }));
+    const instruction = 'Continue the reply exactly where it stopped. Do not repeat anything already written.';
+
+    try {
+      dispatch({ type: 'phaseChanged', phase: 'processing' });
+      const gemma = await getGemma();
+      await gemma.prepare((fraction) => dispatch({ type: 'loadProgressChanged', fraction }));
+      dispatch({ type: 'loadProgressChanged', fraction: undefined });
+      startSpeechStream();
+      const result = await gemma.generate({
+        messages: buildLocalMessages(history, instruction),
+        maxTokens: MAX_REPLY_TOKENS,
+        signal: controller.signal,
+        onPartial: (partial) => {
+          dispatch({ type: 'replyExtended', id: last.id, text: joinText(previous, partial), truncated: true });
+          feedSpeech(partial, false);
+        },
+      });
+      dispatch({
+        type: 'replyExtended',
+        id: last.id,
+        text: joinText(previous, result.text),
+        truncated: Boolean(result.truncated),
+      });
+      feedSpeech(result.text, true);
+      if (speechStreamRef.current) {
+        ttsRef.current.endStream();
+      } else {
+        dispatch({ type: 'phaseChanged', phase: 'idle' });
+        scheduleListenAfterReply();
+      }
+    } catch (error) {
+      speechStreamRef.current = null;
+      if (controller.signal.aborted) {
+        dispatch({ type: 'phaseChanged', phase: 'idle' });
+      } else {
+        dispatch({ type: 'failed', message: friendlyError(error) });
+      }
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+      inFlightRef.current = false;
+    }
+  }, [clearReopenTimer, feedSpeech, getGemma, scheduleListenAfterReply, startSpeechStream]);
 
   // endregion
 
@@ -541,6 +661,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       stopAll,
       clearConversation,
       clearError: () => dispatch({ type: 'errorCleared' }),
+      continueReply,
       newChat,
       openChat,
       removeChat,
@@ -554,6 +675,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       stopSpeaking,
       stopAll,
       clearConversation,
+      continueReply,
       newChat,
       openChat,
       removeChat,

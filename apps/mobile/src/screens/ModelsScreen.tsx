@@ -7,16 +7,22 @@ import { radius, spacing, usePalette } from '../components/theme';
 import { Text } from '../components/AppText';
 import { Button, Card, KeyValueRow } from '../components/ui';
 import { findModel, formatModelSize, LOCAL_MODELS, type LocalModel } from '../services/models/catalog';
+import { SPEECH_RATES } from '../services/settings/settingsStore';
 import {
   checkModelFile,
   defaultModelPath,
+  ensureModelFolder,
+  modelAtPath,
+  modelOnPhone,
   type ModelFileStatus,
   modelStorageReady,
   moveLegacyModels,
+  partialModelProgress,
   requestModelStorage,
+  suggestedModelLocations,
 } from '../services/models/modelFile';
 import { SHARED_MODELS_DIRECTORY } from '../services/models/storage';
-import { isVoiceModelReady } from '../services/speech/voiceModelFile';
+import { isVoiceModelReady, partialVoiceModelProgress } from '../services/speech/voiceModelFile';
 import { VOICE_MODELS } from '../services/speech/voiceModels';
 import type { RootStackParamList } from '../navigation/types';
 import { useModelDownloads } from '../state/ModelDownloadProvider';
@@ -33,15 +39,19 @@ export function ModelsScreen(_props: Props) {
   const [modelPathDraft, setModelPathDraft] = useState(settings.modelPath);
   const [modelStatus, setModelStatus] = useState<ModelFileStatus | null>(null);
   const [downloaded, setDownloaded] = useState<Record<string, boolean>>({});
-  const { active, error: downloadError, finishedCount, start, startSpeech, cancel } = useModelDownloads();
+  const { active, error: downloadError, finishedCount, start, startSpeech, retry, cancel } = useModelDownloads();
   const [storageReady, setStorageReady] = useState<boolean | null>(null);
   const [voiceReady, setVoiceReady] = useState<Record<string, boolean>>({});
+  // Where the active model can be found, with what Buddy sees at each place.
+  const [locations, setLocations] = useState<Array<{ path: string; status: 'yes' | 'no' | 'needs-access' }>>([]);
+  // Share of each model already saved, so a stopped download can be offered as Resume.
+  const [partial, setPartial] = useState<Record<string, number>>({});
 
   const refreshDownloads = async () => {
-    const entries = await Promise.all(
-      LOCAL_MODELS.map(async model => [model.id, (await checkModelFile('', model)).valid] as const),
-    );
-    setDownloaded(Object.fromEntries(entries));
+    const states = await Promise.all(LOCAL_MODELS.map(async model => [model.id, await modelOnPhone(model)] as const));
+    setDownloaded(Object.fromEntries(states.map(([id, state]) => [id, state === 'yes'])));
+    // A file the app cannot see means storage access is missing, so ask for it.
+    if (states.some(([, state]) => state === 'needs-access')) setStorageReady(false);
   };
 
   const refreshModelStatus = async (configured: string, model: LocalModel) => {
@@ -67,6 +77,19 @@ export function ModelsScreen(_props: Props) {
 
   useEffect(() => {
     refreshModelStatus(settings.modelPath, activeModel);
+    // A custom location that cannot be read is replaced by the default one when the model is there, so the
+    // error clears without the user having to act.
+    if (settings.modelPath) {
+      Promise.all([
+        modelAtPath(settings.modelPath, activeModel),
+        modelAtPath(defaultModelPath(activeModel), activeModel),
+      ]).then(([custom, fallback]) => {
+        if (custom !== 'yes' && fallback === 'yes') {
+          update({ modelPath: '' });
+          setModelPathDraft('');
+        }
+      });
+    }
     // Recheck when the active model or its location changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.modelId, settings.modelPath]);
@@ -78,6 +101,17 @@ export function ModelsScreen(_props: Props) {
     Promise.all(VOICE_MODELS.map(async model => [model.id, await isVoiceModelReady(model)] as const)).then(entries =>
       setVoiceReady(Object.fromEntries(entries)),
     );
+    ensureModelFolder();
+    Promise.all(
+      suggestedModelLocations(activeModel).map(async path => ({
+        path,
+        status: await modelAtPath(path, activeModel),
+      })),
+    ).then(setLocations);
+    Promise.all([
+      ...LOCAL_MODELS.map(async model => [model.id, await partialModelProgress(model)] as const),
+      ...VOICE_MODELS.map(async model => [model.id, await partialVoiceModelProgress(model)] as const),
+    ]).then(entries => setPartial(Object.fromEntries(entries)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finishedCount]);
 
@@ -140,7 +174,7 @@ export function ModelsScreen(_props: Props) {
                   <View style={styles.buttons}>
                     {!isDownloaded ? (
                       <Button
-                        label={`Download (${formatModelSize(model.sizeBytes)})`}
+                        label={resumeLabel(partial[model.id], `Download (${formatModelSize(model.sizeBytes)})`)}
                         variant="primary"
                         onPress={() => start(model)}
                         disabled={active !== null || storageReady !== true}
@@ -155,6 +189,40 @@ export function ModelsScreen(_props: Props) {
             );
           })}
           {downloadError ? <Text style={[styles.hint, { color: palette.danger }]}>{downloadError}</Text> : null}
+          {downloadError ? <Button label="Retry" variant="primary" onPress={retry} /> : null}
+
+          <Text style={[styles.label, { color: palette.mutedText }]}>Where Buddy looks for {activeModel.label}</Text>
+          {locations.map(location => {
+            const inUse = settings.modelPath === location.path || (!settings.modelPath && location.path === defaultModelPath(activeModel));
+            return (
+              <View key={location.path} style={[styles.modelRow, { borderColor: palette.border }]}>
+                <Text style={[styles.hint, { color: palette.text }]}>{location.path}</Text>
+                <Text style={[styles.hint, { color: palette.mutedText }]}>
+                  {location.status === 'yes'
+                    ? 'Model file found'
+                    : location.status === 'needs-access'
+                      ? 'Buddy cannot see this location yet'
+                      : 'No model here'}
+                  {inUse ? ' · In use' : ''}
+                </Text>
+                {location.status === 'yes' && !inUse ? (
+                  <Button
+                    label="Use this location"
+                    variant="primary"
+                    onPress={() => {
+                      const choice = location.path === defaultModelPath(activeModel) ? '' : location.path;
+                      update({ modelPath: choice });
+                      setModelPathDraft(choice);
+                    }}
+                  />
+                ) : null}
+              </View>
+            );
+          })}
+          <Text style={[styles.hint, { color: palette.mutedText }]}>
+            Buddy creates the default folder for you. Copy the model file into it, or into another location listed above,
+            and Buddy will find it.
+          </Text>
 
           <Text style={[styles.label, { color: palette.mutedText }]}>
             Custom file location for {activeModel.label} (optional)
@@ -222,7 +290,7 @@ export function ModelsScreen(_props: Props) {
                   />
                 ) : !isDownloaded ? (
                   <Button
-                    label={`Download (${formatModelSize(model.sizeBytes)})`}
+                    label={resumeLabel(partial[model.id], `Download (${formatModelSize(model.sizeBytes)})`)}
                     variant="primary"
                     onPress={() => startSpeech(model)}
                     disabled={active !== null || storageReady !== true}
@@ -231,6 +299,21 @@ export function ModelsScreen(_props: Props) {
               </View>
             );
           })}
+
+          {downloadError ? <Text style={[styles.hint, { color: palette.danger }]}>{downloadError}</Text> : null}
+          {downloadError ? <Button label="Retry" variant="primary" onPress={retry} /> : null}
+
+          <Text style={[styles.label, { color: palette.mutedText }]}>Playback speed for spoken replies</Text>
+          <View style={styles.segmented}>
+            {SPEECH_RATES.map(rate => (
+              <Button
+                key={rate}
+                label={`${rate}x`}
+                variant={settings.speechRate === rate ? 'primary' : 'secondary'}
+                onPress={() => update({ speechRate: rate })}
+              />
+            ))}
+          </View>
 
           <View style={styles.toggleRow}>
             <Text style={[styles.toggleLabel, { color: palette.text }]}>Use offline speech</Text>
@@ -249,6 +332,11 @@ export function ModelsScreen(_props: Props) {
       <BottomDock active="Models" />
     </View>
   );
+}
+
+/** Button text: "Resume (45%)" when part of the file is already saved, otherwise the normal download label. */
+function resumeLabel(progress: number | undefined, fallback: string): string {
+  return progress && progress > 0 ? `Resume (${Math.round(progress * 100)}%)` : fallback;
 }
 
 const styles = StyleSheet.create({
@@ -270,6 +358,7 @@ const styles = StyleSheet.create({
   },
   modelTitle: { fontSize: 15, fontWeight: '600' },
   buttons: { gap: spacing.sm },
+  segmented: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
   toggleLabel: { fontSize: 15, flex: 1 },
 });

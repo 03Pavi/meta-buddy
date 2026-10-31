@@ -110,7 +110,9 @@ export class GemmaProvider implements AIProvider {
       if (!text) {
         throw new GenerationError('The model returned an empty reply. Try rephrasing the question.');
       }
-      return { text, model: this.label };
+      // llama.rn reports when generation stopped at the token limit, so the reply was cut short.
+      const truncated = Boolean((result as { stopped_limit?: number }).stopped_limit);
+      return { text, model: this.label, truncated };
     } catch (error) {
       if (error instanceof GenerationError) throw error;
       throw new GenerationError('The on-device model stopped unexpectedly. Try again.');

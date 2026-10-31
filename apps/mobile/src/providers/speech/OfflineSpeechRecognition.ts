@@ -25,10 +25,12 @@ export class OfflineSpeechRecognition implements SpeechRecognitionProvider {
 
   async start(_locale: string, callbacks: RecognitionCallbacks): Promise<void> {
     this.unsubscribe();
+    console.log('[speech] offline start, model at', this.modelPath);
     try {
       const engine = vosk();
       if (this.loadedPath !== this.modelPath) {
         await engine.loadModel(this.modelPath);
+        console.log('[speech] offline model loaded');
         this.loadedPath = this.modelPath;
       }
       this.subscriptions = [
@@ -37,6 +39,7 @@ export class OfflineSpeechRecognition implements SpeechRecognitionProvider {
         }),
         engine.onFinalResult(text => {
           const trimmed = (text ?? '').trim();
+          console.log('[speech] offline final result:', trimmed);
           this.unsubscribe();
           if (trimmed) {
             callbacks.onFinal(trimmed);

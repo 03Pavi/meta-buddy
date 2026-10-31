@@ -1,14 +1,14 @@
 import {
   buildLocalMessages,
   estimateTokens,
-  PIP_SYSTEM_PROMPT,
+  BUDDY_SYSTEM_PROMPT,
 } from '../src/providers/ai/promptBudget';
 
-describe('PIP_SYSTEM_PROMPT', () => {
-  it('is the Pip prompt from the specification', () => {
-    expect(PIP_SYSTEM_PROMPT).toContain('You are Pip, a friendly and helpful personal AI assistant.');
-    expect(PIP_SYSTEM_PROMPT).toContain("Answer the user's actual question directly.");
-    expect(PIP_SYSTEM_PROMPT).toContain('If you do not know something, say so.');
+describe('BUDDY_SYSTEM_PROMPT', () => {
+  it('names the assistant Buddy and credits Pavitar as the creator', () => {
+    expect(BUDDY_SYSTEM_PROMPT).toContain('You are Buddy, a friendly and helpful personal AI assistant.');
+    expect(BUDDY_SYSTEM_PROMPT).toContain("Answer the user's actual question directly.");
+    expect(BUDDY_SYSTEM_PROMPT).toContain('created by Pavitar');
   });
 });
 
@@ -16,7 +16,7 @@ describe('buildLocalMessages', () => {
   it('puts the system prompt first and the new user message last', () => {
     const messages = buildLocalMessages([], 'Hello');
     expect(messages).toEqual([
-      { role: 'system', content: PIP_SYSTEM_PROMPT },
+      { role: 'system', content: BUDDY_SYSTEM_PROMPT },
       { role: 'user', content: 'Hello' },
     ]);
   });

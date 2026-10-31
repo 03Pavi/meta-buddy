@@ -1,5 +1,8 @@
 import React, { useEffect } from 'react';
 import { MetaWearables } from '../../modules/meta-wearables/src';
+import { PermissionGate } from '../components/PermissionGate';
+import { findModel } from '../services/models/catalog';
+import { defaultModelPath, modelAtPath } from '../services/models/modelFile';
 import { RootNavigator } from '../navigation/RootNavigator';
 import { AssistantProvider } from '../state/AssistantProvider';
 import { GlassesProvider, useGlasses } from '../state/GlassesProvider';
@@ -21,8 +24,21 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
 
 /** App-level effects: initialise the SDK on launch and keep hands-free invocations in line with Settings. */
 function AppEffects() {
-  const { settings, loaded } = useSettings();
+  const { settings, loaded, update } = useSettings();
   const { state, actions } = useGlasses();
+
+  // A saved custom model location that cannot be read is replaced by the default one when the model is there.
+  // This runs at startup, so the chat does not keep failing on a location the user no longer needs.
+  useEffect(() => {
+    if (!loaded || !settings.modelPath) return;
+    const model = findModel(settings.modelId);
+    Promise.all([
+      modelAtPath(settings.modelPath, model),
+      modelAtPath(defaultModelPath(model), model),
+    ]).then(([custom, fallback]) => {
+      if (custom !== 'yes' && fallback === 'yes') update({ modelPath: '' });
+    });
+  }, [loaded, settings.modelPath, settings.modelId, update]);
 
   useEffect(() => {
     if (MetaWearables.available) {
@@ -52,6 +68,7 @@ export function AppShell() {
     <AppProviders>
       <AppEffects />
       <RootNavigator />
+      <PermissionGate />
     </AppProviders>
   );
 }
