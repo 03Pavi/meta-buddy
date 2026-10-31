@@ -33,8 +33,8 @@ export const VOICE_MODELS: readonly VoiceModel[] = [
   },
 ];
 
-/** Shared folder for speech models, so they stay on the phone if the app is removed. */
-export const SHARED_VOICE_DIRECTORY = '/storage/emulated/0/Download/Buddy/voice';
+/** The app's own folder for speech models. It needs no storage permission. */
+export const SHARED_VOICE_DIRECTORY = '/storage/emulated/0/Android/data/com.buddy/files/voice';
 
 export const DEFAULT_VOICE_MODEL_ID = 'vosk-en-small';
 

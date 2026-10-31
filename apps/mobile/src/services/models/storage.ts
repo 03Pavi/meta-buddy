@@ -5,8 +5,11 @@ const ALL_FILES_ACCESS_ACTION = 'android.settings.MANAGE_APP_ALL_FILES_ACCESS_PE
 const ANDROID_11 = 30;
 const ANDROID_13 = 33;
 
-/** Shared folder that holds downloaded models. It stays on the phone when the app is removed. */
-export const SHARED_MODELS_DIRECTORY = '/storage/emulated/0/Download/Buddy/models';
+/**
+ * Folder that holds downloaded models: the app's own folder on the phone. Android lets the app use it without any
+ * storage permission. The models are removed when the app is uninstalled.
+ */
+export const SHARED_MODELS_DIRECTORY = '/storage/emulated/0/Android/data/com.buddy/files/models';
 
 /** Reports whether the app can write to the shared models folder. */
 export async function hasModelStorageAccess(

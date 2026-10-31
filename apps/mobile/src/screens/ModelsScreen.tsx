@@ -128,9 +128,8 @@ export function ModelsScreen(_props: Props) {
             tone={storageReady === true ? 'success' : 'warning'}
           />
           <Text style={[styles.hint, { color: palette.mutedText }]}>
-            Buddy needs permission to save models in the Download folder, so they stay on the phone if the app is removed.
-            On Android 11 and later, tap Allow, switch on “Allow access to manage all files” for Buddy, then come back and
-            tap Check access.
+            Models are saved in Buddy's own folder on this phone. Buddy needs no storage permission for it. Models are
+            removed if the app is uninstalled.
           </Text>
           {storageReady === true ? null : (
             <Button
@@ -261,8 +260,8 @@ export function ModelsScreen(_props: Props) {
             />
           ) : null}
           <Text style={[styles.hint, { color: palette.mutedText }]}>
-            Models are saved in Download/Buddy/models on this phone. To use a model file you already have, copy it into that
-            folder, or set a custom file location above.
+            Models are saved in Buddy's own folder on this phone. To use a model file you already have, set its location
+            above.
           </Text>
         </Card>
         <Card title="Voice models (offline speech)">

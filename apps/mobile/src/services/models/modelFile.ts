@@ -48,7 +48,8 @@ export function modelStorageReady(): Promise<boolean> {
 export async function moveLegacyModels(): Promise<void> {
   if (Platform.OS !== 'android') return;
   for (const model of LOCAL_MODELS) {
-    const legacy = `${RNFS().ExternalDirectoryPath}/models/${model.fileName}`;
+    // Models downloaded to the old shared Download folder are moved into the app's own folder.
+    const legacy = `/storage/emulated/0/Download/Buddy/models/${model.fileName}`;
     const target = defaultModelPath(model);
     const partial = `${target}.part`;
     try {
@@ -217,7 +218,7 @@ export function suggestedModelLocations(model: LocalModel): string[] {
   if (Platform.OS !== 'android') return [];
   return [
     defaultModelPath(model),
-    `${RNFS().ExternalDirectoryPath}/models/${model.fileName}`,
+    `/storage/emulated/0/Download/Buddy/models/${model.fileName}`,
     `/storage/emulated/0/Documents/Buddy/models/${model.fileName}`,
   ];
 }

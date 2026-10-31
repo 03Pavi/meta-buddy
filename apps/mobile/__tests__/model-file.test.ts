@@ -14,8 +14,10 @@ describe('resolveModelPath', () => {
     (Platform as { OS: string }).OS = 'android';
   });
 
-  it('uses the shared Download/Buddy/models folder when the setting is blank', () => {
-    expect(resolveModelPath('  ')).toBe(`/storage/emulated/0/Download/Buddy/models/${GEMMA_MODEL_FILE_NAME}`);
+  it("uses the app's own models folder when the setting is blank", () => {
+    expect(resolveModelPath('  ')).toBe(
+      `/storage/emulated/0/Android/data/com.buddy/files/models/${GEMMA_MODEL_FILE_NAME}`,
+    );
   });
 
   it('strips a file:// prefix from a configured path', () => {
