@@ -35,10 +35,13 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      # Installs current command-line tools. The runner's preinstalled ones are too old to find android-37.
+      - uses: android-actions/setup-android@v3
+
       - name: Install Android SDK components
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+          (yes || true) | sdkmanager --licenses > /dev/null
+          sdkmanager \
             "platforms;android-37" \
             "ndk;27.1.12297006" \
             "cmake;3.31.6"
