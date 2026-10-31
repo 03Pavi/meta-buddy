@@ -1,0 +1,683 @@
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  FlatList,
+  Keyboard,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Switch,
+  TextInput,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Text } from '../components/AppText';
+import { Notice, StatusPill } from '../components/ui';
+import { radius, spacing, usePalette } from '../components/theme';
+import {
+  isBusy,
+  type AssistantPhase,
+  type TranscriptMessage,
+} from '../features/assistant/assistantState';
+import { connectionSummary } from '../features/glasses/glassesState';
+import type { ChatSummary } from '../services/storage/chatStore';
+import { findModel } from '../services/models/catalog';
+import { useAssistant } from '../state/AssistantProvider';
+import { useGlasses } from '../state/GlassesProvider';
+import { useSettings } from '../state/SettingsProvider';
+import type { RootStackParamList } from '../navigation/types';
+
+type Props = NativeStackScreenProps<RootStackParamList, 'Assistant'>;
+
+const PHASE_LABEL: Record<AssistantPhase, string> = {
+  idle: 'Ready',
+  listening: 'Listening…',
+  processing: 'Thinking…',
+  capturing: 'Capturing a photo…',
+  speaking: 'Speaking…',
+  error: 'Something went wrong',
+};
+
+const CONNECTION_LABEL = {
+  unavailable: 'Glasses unavailable',
+  not_registered: 'Glasses not registered',
+  no_device: 'No glasses nearby',
+  idle: 'Glasses ready',
+  connecting: 'Connecting…',
+  connected: 'Glasses connected',
+} as const;
+
+const CONNECTION_TONE = {
+  unavailable: 'neutral',
+  not_registered: 'warning',
+  no_device: 'warning',
+  idle: 'neutral',
+  connecting: 'accent',
+  connected: 'success',
+} as const;
+
+/** Starting prompts shown on an empty chat. Tapping one sends it. */
+const SUGGESTIONS = [
+  { label: 'Explain a topic simply', mark: 'E' },
+  { label: 'Help me plan my day', mark: 'P' },
+  { label: 'Write a short, polite message', mark: 'W' },
+];
+
+export function AssistantScreen({ navigation }: Props) {
+  const palette = usePalette();
+  const insets = useSafeAreaInsets();
+  const { state, actions, chats, currentChatId } = useAssistant();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const { state: glasses } = useGlasses();
+  const { settings, update } = useSettings();
+  const [draft, setDraft] = useState('');
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const listRef = useRef<FlatList<TranscriptMessage>>(null);
+
+  // Android does not resize this screen for the keyboard, so the composer is lifted by the keyboard height.
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvent, event => setKeyboardHeight(event.endCoordinates.height));
+    const hide = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  const busy = isBusy(state.phase);
+  const listening = state.phase === 'listening';
+  const speaking = state.phase === 'speaking';
+  const cameraOn =
+    state.cameraActive ||
+    glasses.cameraState === 'STREAMING' ||
+    glasses.cameraState === 'STARTING';
+  const connection = connectionSummary(glasses);
+  const speechDisabled = settings.speechInput === 'text';
+  const hasText = draft.trim().length > 0;
+
+  useEffect(() => {
+    if (state.messages.length > 0) {
+      listRef.current?.scrollToEnd({ animated: true });
+    }
+  }, [state.messages.length]);
+
+  const send = () => {
+    const text = draft.trim();
+    if (!text || busy) return;
+    setDraft('');
+    actions.sendText(text);
+  };
+
+  const sendSuggestion = (text: string) => {
+    if (busy) return;
+    actions.sendText(text);
+  };
+
+  const setVoiceMode = (enabled: boolean) => {
+    update({ voiceMode: enabled });
+    actions.setVoiceMode(enabled);
+  };
+
+  const phaseLabel = state.draft
+    ? `Hearing: ${state.draft}`
+    : state.phase === 'processing' && state.loadProgress !== undefined
+      ? `Loading model… ${Math.round(state.loadProgress * 100)}%`
+      : PHASE_LABEL[state.phase];
+
+  // One round button on the right of the composer changes with what the user can do next.
+  const composerAction = (() => {
+    if (busy && !listening) {
+      return { label: 'Stop', variant: 'stop' as const, onPress: () => actions.stopAll() };
+    }
+    if (listening) {
+      return { label: 'Stop', variant: 'stop' as const, onPress: () => actions.stopListening() };
+    }
+    if (hasText) {
+      return { label: 'Send', variant: 'send' as const, onPress: send };
+    }
+    return {
+      label: 'Speak',
+      variant: 'speak' as const,
+      onPress: () => actions.startListening(),
+      disabled: speechDisabled || speaking,
+    };
+  })();
+
+  return (
+    <KeyboardAvoidingView
+      style={[
+        styles.flex,
+        { backgroundColor: palette.background, paddingBottom: keyboardHeight > 0 ? keyboardHeight : insets.bottom },
+      ]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <View style={[styles.topBar, { paddingTop: insets.top + spacing.sm }]}>
+        <CircleButton label="Open chats" glyph="≡" onPress={() => setDrawerOpen(true)} />
+        <Text style={[styles.topTitle, { color: palette.text }]}>Buddy</Text>
+        <View style={styles.topActions}>
+          <Pressable
+            onPress={() => navigation.navigate('Settings')}
+            accessibilityRole="button"
+            accessibilityLabel="Open settings"
+            style={[styles.textButton, { borderColor: palette.border }]}
+          >
+            <Text style={[styles.textButtonLabel, { color: palette.text }]}>Settings</Text>
+          </Pressable>
+          <CircleButton
+            label="Open glasses connection"
+            glyph="◎"
+            onPress={() => navigation.navigate('Glasses')}
+          />
+        </View>
+      </View>
+
+      <View style={styles.statusRow}>
+        <StatusPill label={`${findModel(settings.modelId).label} · on this phone`} tone="accent" />
+        <StatusPill label={CONNECTION_LABEL[connection]} tone={CONNECTION_TONE[connection]} />
+        {cameraOn ? <StatusPill label="● Camera on" tone="danger" /> : null}
+        <View style={styles.flex} />
+        <Pressable
+          onPress={() => actions.clearConversation()}
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel="Clear conversation"
+        >
+          <Text style={[styles.clear, { color: busy ? palette.mutedText : palette.danger }]}>Clear</Text>
+        </Pressable>
+      </View>
+
+      {state.lastError ? (
+        <View style={styles.notice}>
+          <Notice message={state.lastError} onDismiss={actions.clearError} />
+          {state.phase === 'error' && state.lastUserText ? (
+            <Pressable
+              onPress={() => actions.retry()}
+              accessibilityRole="button"
+              accessibilityLabel="Retry"
+              style={[styles.retry, { backgroundColor: palette.accent }]}
+            >
+              <Text style={[styles.retryLabel, { color: palette.accentText }]}>Retry</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
+      {state.messages.length === 0 ? (
+        <View style={styles.empty}>
+          <Text style={[styles.greeting, { color: palette.text }]}>What's on your mind?</Text>
+          <Text style={[styles.greetingBody, { color: palette.mutedText }]}>
+            Replies are made on this phone, so nothing you write is sent to a server.
+          </Text>
+          <View style={styles.suggestions}>
+            {SUGGESTIONS.map(item => (
+              <SuggestionRow
+                key={item.label}
+                label={item.label}
+                mark={item.mark}
+                onPress={() => sendSuggestion(item.label)}
+              />
+            ))}
+          </View>
+        </View>
+      ) : (
+        <FlatList
+          ref={listRef}
+          data={state.messages}
+          keyExtractor={item => item.id}
+          contentContainerStyle={styles.transcript}
+          renderItem={({ item }) => <MessageBubble message={item} />}
+        />
+      )}
+
+      <View style={styles.footer}>
+        <View style={styles.footerMeta}>
+          <Text style={[styles.phase, { color: palette.mutedText }]} accessibilityLiveRegion="polite">
+            {phaseLabel}
+          </Text>
+          <View style={styles.voiceToggle}>
+            <Text style={[styles.voiceLabel, { color: palette.mutedText }]}>Voice mode</Text>
+            <Switch
+              value={settings.voiceMode}
+              onValueChange={setVoiceMode}
+              disabled={speechDisabled}
+              accessibilityLabel="Voice mode"
+              accessibilityHint={
+                speechDisabled
+                  ? 'Choose phone or glasses speech in Settings first'
+                  : 'When on, the assistant listens again after each reply'
+              }
+            />
+          </View>
+        </View>
+
+        {speaking ? (
+          <Pressable
+            onPress={() => actions.stopSpeaking()}
+            accessibilityRole="button"
+            accessibilityLabel="Stop speaking"
+            style={[styles.stopSpeaking, { borderColor: palette.border }]}
+          >
+            <Text style={[styles.stopSpeakingLabel, { color: palette.danger }]}>Stop speaking</Text>
+          </Pressable>
+        ) : null}
+
+        <View style={[styles.composer, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+          <TextInput
+            value={draft}
+            onChangeText={setDraft}
+            placeholder="Ask Buddy…"
+            placeholderTextColor={palette.mutedText}
+            style={[styles.input, { color: palette.text }]}
+            onSubmitEditing={send}
+            returnKeyType="send"
+            editable={!busy}
+            multiline
+            accessibilityLabel="Message"
+          />
+          <View style={styles.composerBottom}>
+            <View style={styles.flex} />
+            <ComposerButton
+              label={composerAction.label}
+              variant={composerAction.variant}
+              disabled={'disabled' in composerAction ? composerAction.disabled : false}
+              onPress={composerAction.onPress}
+            />
+          </View>
+        </View>
+      </View>
+      <ChatDrawer
+        visible={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        chats={chats}
+        currentChatId={currentChatId}
+        historyOn={settings.keepHistory}
+        onNew={() => actions.newChat()}
+        onOpen={id => actions.openChat(id)}
+        onDelete={id => actions.removeChat(id)}
+        onNavigate={route => navigation.navigate(route)}
+      />
+    </KeyboardAvoidingView>
+  );
+}
+
+type DrawerRoute = 'Home' | 'Glasses' | 'Settings';
+
+/** Left-side panel with saved chats. Opening, starting or deleting a chat closes it. */
+function ChatDrawer({
+  visible,
+  onClose,
+  chats,
+  currentChatId,
+  historyOn,
+  onNew,
+  onOpen,
+  onDelete,
+  onNavigate,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  chats: ChatSummary[];
+  currentChatId: string | null;
+  historyOn: boolean;
+  onNew: () => void;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+  onNavigate: (route: DrawerRoute) => void;
+}) {
+  const palette = usePalette();
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.drawerRoot}>
+        <View
+          style={[
+            styles.drawer,
+            { backgroundColor: palette.surface, borderColor: palette.border, paddingTop: insets.top + spacing.lg },
+          ]}
+        >
+          <Text style={[styles.drawerTitle, { color: palette.text }]}>Chats</Text>
+          <Pressable
+            onPress={() => {
+              onClose();
+              onNew();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="New chat"
+            style={[styles.drawerNew, { backgroundColor: palette.accent }]}
+          >
+            <Text style={[styles.drawerNewLabel, { color: palette.accentText }]}>New chat</Text>
+          </Pressable>
+
+          {historyOn ? null : (
+            <Text style={[styles.drawerHint, { color: palette.mutedText }]}>
+              Chat history is off. Turn on “Keep conversation history” in Settings to save chats on this phone.
+            </Text>
+          )}
+          {historyOn && chats.length === 0 ? (
+            <Text style={[styles.drawerHint, { color: palette.mutedText }]}>No saved chats yet.</Text>
+          ) : null}
+
+          <FlatList
+            data={chats}
+            keyExtractor={item => item.id}
+            style={styles.drawerList}
+            renderItem={({ item }) => (
+              <View style={[styles.chatRow, { borderColor: palette.border }]}>
+                <Pressable
+                  onPress={() => {
+                    onClose();
+                    onOpen(item.id);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open chat ${item.title}`}
+                  style={styles.chatOpen}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.chatTitle,
+                      { color: palette.text, fontWeight: item.id === currentChatId ? '700' : '500' },
+                    ]}
+                  >
+                    {item.title}
+                  </Text>
+                  <Text style={[styles.chatDate, { color: palette.mutedText }]}>
+                    {new Date(item.updatedAt).toLocaleDateString()}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => onDelete(item.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Delete chat ${item.title}`}
+                  style={styles.chatDelete}
+                >
+                  <Text style={[styles.chatDeleteLabel, { color: palette.danger }]}>Delete</Text>
+                </Pressable>
+              </View>
+            )}
+          />
+
+          <View style={[styles.drawerLinks, { borderColor: palette.border, paddingBottom: insets.bottom + spacing.md }]}>
+            {(['Home', 'Glasses', 'Settings'] as const).map(route => (
+              <Pressable
+                key={route}
+                onPress={() => {
+                  onClose();
+                  onNavigate(route);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={route}
+              >
+                <Text style={[styles.drawerLink, { color: palette.accent }]}>{route}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+        <Pressable style={styles.scrim} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close chats" />
+      </View>
+    </Modal>
+  );
+}
+
+function CircleButton({ label, glyph, onPress }: { label: string; glyph: string; onPress: () => void }) {
+  const palette = usePalette();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={[styles.circle, { backgroundColor: palette.surface, borderColor: palette.border }]}
+    >
+      <Text style={[styles.circleGlyph, { color: palette.text }]}>{glyph}</Text>
+    </Pressable>
+  );
+}
+
+function SuggestionRow({ label, mark, onPress }: { label: string; mark: string; onPress: () => void }) {
+  const palette = usePalette();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => [styles.suggestion, { opacity: pressed ? 0.7 : 1 }]}
+    >
+      <View style={[styles.mark, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+        <Text style={[styles.markText, { color: palette.accent }]}>{mark}</Text>
+      </View>
+      <Text style={[styles.suggestionLabel, { color: palette.text }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function ComposerButton({
+  label,
+  variant,
+  disabled,
+  onPress,
+}: {
+  label: string;
+  variant: 'send' | 'speak' | 'stop';
+  disabled?: boolean;
+  onPress: () => void;
+}) {
+  const palette = usePalette();
+  const background =
+    variant === 'stop' ? palette.dangerSurface : variant === 'send' ? palette.accent : palette.neutralSurface;
+  const foreground =
+    variant === 'stop' ? palette.danger : variant === 'send' ? palette.accentText : palette.accent;
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
+      style={({ pressed }) => [
+        styles.composerButton,
+        { backgroundColor: background, opacity: disabled ? 0.4 : pressed ? 0.8 : 1 },
+      ]}
+    >
+      <Text style={[styles.composerButtonLabel, { color: foreground }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function MessageBubble({ message }: { message: TranscriptMessage }) {
+  const palette = usePalette();
+  const isUser = message.role === 'user';
+  const isSystem = message.role === 'system';
+  return (
+    <View style={[styles.bubbleWrap, isUser ? styles.alignEnd : styles.alignStart]}>
+      <View
+        style={[
+          styles.bubble,
+          isUser
+            ? { backgroundColor: palette.accent }
+            : isSystem
+              ? { backgroundColor: palette.neutralSurface }
+              : { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: StyleSheet.hairlineWidth },
+        ]}
+        accessibilityLabel={`${message.role}: ${message.text}`}
+      >
+        <Text
+          style={[
+            styles.bubbleText,
+            {
+              color: isUser
+                ? palette.accentText
+                : isSystem
+                  ? palette.mutedText
+                  : palette.text,
+            },
+          ]}
+        >
+          {message.text}
+        </Text>
+        {message.withImage ? (
+          <Text style={[styles.imageTag, { color: isUser ? palette.accentText : palette.mutedText }]}>
+            With glasses photo
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
+  topTitle: { flex: 1, fontSize: 20, fontWeight: '600' },
+  topActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  circle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  circleGlyph: { fontSize: 20, fontWeight: '600' },
+  textButton: {
+    height: 44,
+    paddingHorizontal: spacing.md,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  textButtonLabel: { fontSize: 15, fontWeight: '600' },
+  statusRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
+  clear: { fontSize: 15, fontWeight: '600', paddingHorizontal: spacing.xs },
+  notice: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, gap: spacing.sm },
+  retry: {
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryLabel: { fontSize: 15, fontWeight: '600' },
+  empty: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+    gap: spacing.md,
+  },
+  greeting: { fontSize: 34, fontWeight: '600', lineHeight: 40 },
+  greetingBody: { fontSize: 15, lineHeight: 22 },
+  suggestions: { gap: spacing.lg, marginTop: spacing.xl },
+  suggestion: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
+  mark: {
+    width: 56,
+    height: 56,
+    borderRadius: radius.md * 2,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  markText: { fontSize: 20, fontWeight: '700' },
+  suggestionLabel: { fontSize: 17, flexShrink: 1 },
+  transcript: { padding: spacing.lg, gap: spacing.md },
+  bubbleWrap: { flexDirection: 'row' },
+  alignEnd: { justifyContent: 'flex-end' },
+  alignStart: { justifyContent: 'flex-start' },
+  bubble: {
+    maxWidth: '85%',
+    borderRadius: radius.md * 2,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: spacing.xs,
+  },
+  bubbleText: { fontSize: 16, lineHeight: 22 },
+  imageTag: { fontSize: 12 },
+  footer: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  footerMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  phase: { fontSize: 13, minHeight: 18, flexShrink: 1 },
+  voiceToggle: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  voiceLabel: { fontSize: 13, fontWeight: '600' },
+  stopSpeaking: {
+    alignSelf: 'flex-start',
+    height: 40,
+    paddingHorizontal: spacing.lg,
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stopSpeakingLabel: { fontSize: 15, fontWeight: '600' },
+  composer: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.md * 3,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
+    minHeight: 110,
+  },
+  input: { fontSize: 17, maxHeight: 160, paddingTop: 0, paddingBottom: spacing.sm },
+  composerBottom: { flexDirection: 'row', alignItems: 'center' },
+  composerButton: {
+    height: 44,
+    minWidth: 72,
+    paddingHorizontal: spacing.lg,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  composerButtonLabel: { fontSize: 15, fontWeight: '700' },
+  drawerRoot: { flex: 1, flexDirection: 'row' },
+  drawer: {
+    width: '80%',
+    maxWidth: 340,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
+    gap: spacing.md,
+    borderRightWidth: StyleSheet.hairlineWidth,
+  },
+  scrim: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)' },
+  drawerTitle: { fontSize: 24, fontWeight: '700' },
+  drawerNew: { height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  drawerNewLabel: { fontSize: 16, fontWeight: '700' },
+  drawerHint: { fontSize: 13, lineHeight: 18 },
+  drawerList: { flex: 1 },
+  chatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  chatOpen: { flex: 1, gap: spacing.xs },
+  chatTitle: { fontSize: 15 },
+  chatDate: { fontSize: 12 },
+  chatDelete: { paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  chatDeleteLabel: { fontSize: 13, fontWeight: '600' },
+  drawerLinks: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  drawerLink: { fontSize: 15, fontWeight: '600' },
+});

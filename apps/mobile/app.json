@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Buddy",
+    "slug": "pavi-assistant",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "buddy",
+    "newArchEnabled": true,
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.buddy",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MANAGE_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      "./plugins/withPaviAndroid",
+      "expo-build-properties"
+    ]
+  }
+}

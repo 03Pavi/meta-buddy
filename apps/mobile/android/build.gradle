@@ -1,0 +1,45 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+  }
+  dependencies {
+    classpath('com.android.tools.build:gradle')
+    classpath('com.facebook.react:react-native-gradle-plugin')
+    def kotlinVersion = findProperty('android.kotlinVersion')
+    classpath(kotlinVersion ? "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion" : 'org.jetbrains.kotlin:kotlin-gradle-plugin')
+  }
+}
+
+allprojects {
+  repositories {
+    google()
+    mavenCentral()
+    maven { url 'https://www.jitpack.io' }
+  }
+}
+
+apply plugin: "expo-root-project"
+apply plugin: "com.facebook.react.rootproject"
+
+// // @pavi-plugin cmake
+subprojects { subproject ->
+    def setCmake = {
+        try {
+            subproject.android.externalNativeBuild.cmake.version = "3.31.6"
+            // Short build output folder: Windows rejects the long CMake object paths otherwise. Other systems keep the default.
+            if (System.getProperty("os.name").toLowerCase().contains("windows")) {
+                subproject.android.externalNativeBuild.cmake.buildStagingDirectory = "C:/b"
+            }
+        } catch (Exception ignored) {
+            // Modules without native code have no cmake block.
+        }
+    }
+    if (subproject.state.executed) {
+        setCmake()
+    } else {
+        subproject.afterEvaluate { setCmake() }
+    }
+}
