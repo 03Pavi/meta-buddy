@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Buddy Privacy Policy</title>
+<style>
+  :root { --bg: #0A0C0F; --text: #E9ECEF; --muted: #9AA3AD; --accent: #C8F542; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #FFFFFF; --text: #14171A; --muted: #5A6470; --accent: #4A6B00; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; line-height: 1.6; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 28px; margin-bottom: 4px; }
+  h2 { font-size: 18px; margin-top: 28px; color: var(--accent); }
+  p, li { color: var(--text); }
+  .muted { color: var(--muted); font-size: 14px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Buddy Privacy Policy</h1>
+  <p class="muted">Effective date: October 31, 2026</p>
+
+  <p>Buddy is an Android assistant app. It runs its AI model on your phone and works with Ray-Ban Meta glasses through Meta's Wearables Device Access Toolkit. This policy explains what Buddy does with your information.</p>
+
+  <h2>Summary</h2>
+  <ul>
+    <li>Buddy does not send your chats, voice, or photos to the developer or to any server the developer runs.</li>
+    <li>Buddy has no accounts, no ads, and no analytics or crash-reporting SDKs.</li>
+    <li>Your chats, settings, and downloaded models stay on your phone. You can delete them at any time.</li>
+  </ul>
+
+  <h2>Information Buddy uses on your phone</h2>
+  <ul>
+    <li><strong>Chat history and settings.</strong> Stored only on your device. You can clear chats in the app or uninstall Buddy to remove them.</li>
+    <li><strong>Voice.</strong> Speech recognition runs on your device using an offline Vosk model. Buddy's spoken replies use your device's text-to-speech engine.</li>
+    <li><strong>Microphone.</strong> Used only while you talk to Buddy or use dictation. Audio is processed on the device.</li>
+    <li><strong>Storage.</strong> Buddy saves AI and voice models in its own folder on your phone. It does not read your other files.</li>
+    <li><strong>Bluetooth.</strong> Used to find and connect to your Ray-Ban Meta glasses.</li>
+  </ul>
+
+  <h2>Network use</h2>
+  <p>Buddy connects to the internet only to download the AI and voice model files you choose. These downloads come from public hosts: Hugging Face (AI models) and alphacephei.com (speech models). Those requests contain no personal information from Buddy. Your chats are never sent over the network.</p>
+
+  <h2>Meta glasses</h2>
+  <p>When you connect Ray-Ban Meta glasses, the connection and any camera, microphone, or input data from the glasses is handled by Meta's Wearables Device Access Toolkit and the Meta AI app. Meta's handling of that data is governed by Meta's own privacy policy, which you can read at <a href="https://www.meta.com/legal/privacy-policy/">meta.com/legal/privacy-policy</a>.</p>
+
+  <h2>Children</h2>
+  <p>Buddy is not directed at children under 13 and does not knowingly collect information from them.</p>
+
+  <h2>Your choices</h2>
+  <p>You can revoke microphone, Bluetooth, and storage permissions in Android settings, delete chats in Buddy, and uninstall the app to remove all of its data from your phone.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the new version will be posted on this page with a new effective date.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about this policy can be asked by opening an issue at <a href="https://github.com/03Pavi/meta-buddy/issues">github.com/03Pavi/meta-buddy/issues</a>.</p>
+</main>
+</body>
+</html>
