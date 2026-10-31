@@ -295,7 +295,15 @@ export function ModelsScreen(_props: Props) {
                     onPress={() => startSpeech(model)}
                     disabled={active !== null || storageReady !== true}
                   />
-                ) : null}
+                ) : settings.speechModelId === model.id ? (
+                  <Text style={[styles.hint, { color: palette.accent }]}>In use for offline speech</Text>
+                ) : (
+                  <Button
+                    label="Use this speech model"
+                    variant="primary"
+                    onPress={() => update({ speechModelId: model.id })}
+                  />
+                )}
               </View>
             );
           })}
@@ -320,7 +328,7 @@ export function ModelsScreen(_props: Props) {
             <Switch
               value={settings.offlineSpeech}
               onValueChange={value => update({ offlineSpeech: value })}
-              disabled={voiceReady[VOICE_MODELS[0].id] !== true && !settings.offlineSpeech}
+              disabled={voiceReady[settings.speechModelId] !== true && !settings.offlineSpeech}
               accessibilityLabel="Use offline speech"
             />
           </View>

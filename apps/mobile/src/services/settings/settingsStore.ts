@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEFAULT_MODEL_ID, LOCAL_MODELS } from '../models/catalog';
+import { VOICE_MODELS } from '../speech/voiceModels';
 
 export type SpeechInputSource = 'glasses' | 'phone' | 'text';
 
@@ -11,6 +12,8 @@ export interface AppSettings {
   speechInput: SpeechInputSource;
   /** Use the offline speech model from Models instead of the phone's own recognizer. */
   offlineSpeech: boolean;
+  /** Which offline speech model from the voice catalog is used when offline speech is on. */
+  speechModelId: string;
   /** Hands-free loop: after each spoken reply, listen again. Turning it on is the user's consent to use the mic. */
   voiceMode: boolean;
   spokenReplies: boolean;
@@ -30,6 +33,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   modelPath: '',
   speechInput: 'phone',
   offlineSpeech: false,
+  speechModelId: 'vosk-en-small',
   voiceMode: false,
   spokenReplies: true,
   keepHistory: false,
@@ -65,6 +69,7 @@ export function parseSettings(raw: unknown): AppSettings {
       v => v === 'glasses' || v === 'phone' || v === 'text',
     ),
     offlineSpeech: pick('offlineSpeech', v => typeof v === 'boolean'),
+    speechModelId: pick('speechModelId', v => VOICE_MODELS.some(model => model.id === v)),
     voiceMode: pick('voiceMode', v => typeof v === 'boolean'),
     spokenReplies: pick('spokenReplies', v => typeof v === 'boolean'),
     keepHistory: pick('keepHistory', v => typeof v === 'boolean'),

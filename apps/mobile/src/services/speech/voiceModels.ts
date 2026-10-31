@@ -22,10 +22,26 @@ export const VOICE_MODELS: readonly VoiceModel[] = [
     note: 'Works with no internet. Best for short questions. Less accurate than the phone recognizer for long speech.',
     license: 'Apache-2.0',
   },
+  {
+    id: 'vosk-hi-small',
+    label: 'Hindi, small (offline)',
+    folderName: 'vosk-model-small-hi-0.22',
+    url: 'https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip',
+    sizeBytes: 44458845,
+    note: 'Works with no internet. Understands spoken Hindi. Hinglish in Roman letters may be less accurate.',
+    license: 'Apache-2.0',
+  },
 ];
 
 /** Shared folder for speech models, so they stay on the phone if the app is removed. */
 export const SHARED_VOICE_DIRECTORY = '/storage/emulated/0/Download/Buddy/voice';
+
+export const DEFAULT_VOICE_MODEL_ID = 'vosk-en-small';
+
+/** The speech model with this id, or the default one when the id is unknown. */
+export function findVoiceModel(id: string): VoiceModel {
+  return VOICE_MODELS.find(model => model.id === id) ?? VOICE_MODELS[0];
+}
 
 export function voiceModelPath(model: VoiceModel): string {
   return `${SHARED_VOICE_DIRECTORY}/${model.folderName}`;

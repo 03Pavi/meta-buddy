@@ -56,16 +56,17 @@ jobs:
       - name: Generate the Android project from the Expo config
         run: node node_modules/expo/bin/cli prebuild --platform android --clean --no-install
 
-      - name: Build the debug APK
+      # The release build bundles the JavaScript inside the APK, so it runs on the phone without a computer running Metro.
+      - name: Build the release APK
         working-directory: apps/mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon
+          ./gradlew :app:assembleRelease --no-daemon
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
-          name: buddy-debug-apk
-          path: apps/mobile/android/app/build/outputs/apk/debug/*.apk
+          name: buddy-release-apk
+          path: apps/mobile/android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14

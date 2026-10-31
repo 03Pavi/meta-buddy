@@ -6,7 +6,7 @@ import type { ChatMessage } from '../providers/types';
 import { buildLocalMessages } from '../providers/ai/promptBudget';
 import { DeviceSpeechRecognition } from '../providers/speech/DeviceSpeechRecognition';
 import { OfflineSpeechRecognition } from '../providers/speech/OfflineSpeechRecognition';
-import { VOICE_MODELS, voiceModelPath } from '../services/speech/voiceModels';
+import { findVoiceModel, voiceModelPath } from '../services/speech/voiceModels';
 import { DeviceTextToSpeech } from '../providers/speech/DeviceTextToSpeech';
 import { toSpeechText } from '../providers/speech/toSpeechText';
 import { findModel } from '../services/models/catalog';
@@ -148,12 +148,17 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
 
   const speechRef = useRef(new DeviceSpeechRecognition());
   const offlineSpeechRef = useRef<OfflineSpeechRecognition | null>(null);
+  const offlineSpeechPathRef = useRef<string | null>(null);
 
   // The offline model is used only when Models has the switch on. Otherwise the phone's recognizer is used.
+  // The engine follows the speech model chosen in Models, so switching models takes effect at the next listen.
   const activeSpeech = useCallback((): DeviceSpeechRecognition | OfflineSpeechRecognition => {
     if (!settingsRef.current.offlineSpeech) return speechRef.current;
-    if (!offlineSpeechRef.current) {
-      offlineSpeechRef.current = new OfflineSpeechRecognition(voiceModelPath(VOICE_MODELS[0]));
+    const path = voiceModelPath(findVoiceModel(settingsRef.current.speechModelId));
+    if (!offlineSpeechRef.current || offlineSpeechPathRef.current !== path) {
+      offlineSpeechRef.current?.destroy();
+      offlineSpeechRef.current = new OfflineSpeechRecognition(path);
+      offlineSpeechPathRef.current = path;
     }
     return offlineSpeechRef.current;
   }, []);
