@@ -92,15 +92,16 @@ export function AssistantScreen({ navigation }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.streamText]);
 
-  // Typing keeps the newest text in view.
-  useEffect(() => {
-    listRef.current?.scrollToEnd({ animated: true });
-  }, [draft]);
   const { state: glasses } = useGlasses();
   const { settings, update } = useSettings();
   const [draft, setDraft] = useState('');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const listRef = useRef<FlatList<TranscriptMessage>>(null);
+
+  // Typing keeps the newest text in view.
+  useEffect(() => {
+    listRef.current?.scrollToEnd({ animated: true });
+  }, [draft]);
 
   // Android does not resize this screen for the keyboard, so the composer is lifted by the keyboard height.
   useEffect(() => {
