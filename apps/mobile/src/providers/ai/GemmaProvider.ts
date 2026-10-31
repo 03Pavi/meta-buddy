@@ -62,6 +62,8 @@ export class GemmaProvider implements AIProvider {
           n_ctx: LOCAL_CONTEXT_TOKENS,
           // The CPU runtime is used by default. GPU offload is an opt-in change after device testing.
           n_gpu_layers: 0,
+          // More CPU threads make prompt reading and reply writing faster on phones with 8 cores.
+          n_threads: 6,
           use_mlock: false,
         },
         (progress: number) => onProgress?.(progress / 100),

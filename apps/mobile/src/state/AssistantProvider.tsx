@@ -40,6 +40,14 @@ export interface AssistantActions {
   clearError: () => void;
   /** Asks the model to carry on from the end of the last reply. */
   continueReply: () => Promise<void>;
+  /** Speaks into the text box: partial and final words go to the caller. Nothing is sent by itself. */
+  dictateStart: (handlers: {
+    onPartial: (text: string) => void;
+    onFinal: (text: string) => void;
+    onError: (message: string) => void;
+    onEnd: () => void;
+  }) => Promise<void>;
+  dictateStop: () => Promise<void>;
   newChat: () => Promise<void>;
   openChat: (id: string) => Promise<void>;
   removeChat: (id: string) => Promise<void>;
@@ -56,10 +64,12 @@ interface AssistantContextValue {
 const AssistantContext = createContext<AssistantContextValue | null>(null);
 
 /** Silence after a reply before the microphone reopens, so the assistant does not hear its own voice. */
-export const ECHO_GUARD_MS = 700;
+export const ECHO_GUARD_MS = 1500;
 /** Safety net: if the speech engine never reports the end of playback, stop waiting after this long. */
 const SPEECH_OUTPUT_FALLBACK_MS = 60_000;
 const SPOKEN_LOCALE = 'en-US';
+/** Silence after the last spoken word that counts as the user having stopped talking. */
+const END_OF_SPEECH_MS = 1200;
 const MAX_REPLY_TOKENS = 220;
 const NOT_TEXT_ONLY_NOTE = 'Gemma on this phone is text-only, so it cannot see the camera. Ask without the camera.';
 
@@ -69,6 +79,23 @@ function newId(): string {
 
 function makeMessage(role: TranscriptMessage['role'], text: string): TranscriptMessage {
   return { id: newId(), role, text, createdAt: Date.now() };
+}
+
+/**
+ * True when recognized text is mostly the words of a reply. That means the microphone heard the speaker, not the user.
+ */
+function isEchoOfReply(heard: string, reply: string): boolean {
+  const words = (text: string) =>
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+  const heardWords = words(heard);
+  if (heardWords.length === 0) return false;
+  const replyWords = new Set(words(reply));
+  const matched = heardWords.filter(word => replyWords.has(word)).length;
+  return matched / heardWords.length >= 0.6;
 }
 
 /** Joins a continued reply to the text before it, so a word cut at the limit is not split by a space. */
@@ -107,6 +134,9 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const speechOutputRef = useRef<{ utteranceId: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   // The reply being spoken as it is written: how much of it has been queued, and whether speech has started.
   const speechStreamRef = useRef<{ utteranceId: string; index: number; spoken: boolean } | null>(null);
+  const endOfSpeechTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Whether the current or last question was asked by voice. Only voice questions get spoken replies.
+  const lastTurnVoiceRef = useRef(false);
   const reopenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listeningSourceRef = useRef<'glasses' | 'phone' | null>(null);
   const transcriptLoadedRef = useRef(false);
@@ -274,8 +304,10 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       session.spoken = true;
       dispatch({ type: 'phaseChanged', phase: 'speaking' });
     }
+    // Stop listening while Buddy speaks, so the microphone does not record the reply.
+    activeSpeech().stop().catch(() => undefined);
     ttsRef.current.speakChunk(chunk);
-  }, []);
+  }, [activeSpeech]);
 
   // endregion
 
@@ -298,9 +330,10 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   // region Conversation turn
 
   const runTurn = useCallback(
-    async (text: string) => {
+    async (text: string, fromVoice = false) => {
       if (inFlightRef.current || isBusy(stateRef.current.phase)) return;
       inFlightRef.current = true;
+      lastTurnVoiceRef.current = fromVoice;
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -329,7 +362,8 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: 'loadProgressChanged', fraction: undefined });
 
         const messages = buildLocalMessages(history, text);
-        startSpeechStream();
+        // Only a question asked by voice gets a spoken reply. Typed questions get text only.
+        if (fromVoice) startSpeechStream();
         const result = await gemma.generate({
           messages,
           maxTokens: MAX_REPLY_TOKENS,
@@ -373,7 +407,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     const text = stateRef.current.lastUserText;
     if (!text) return;
     dispatch({ type: 'errorCleared' });
-    await runTurn(text);
+    await runTurn(text, lastTurnVoiceRef.current);
   }, [runTurn]);
 
   /**
@@ -401,7 +435,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       const gemma = await getGemma();
       await gemma.prepare((fraction) => dispatch({ type: 'loadProgressChanged', fraction }));
       dispatch({ type: 'loadProgressChanged', fraction: undefined });
-      startSpeechStream();
+      if (lastTurnVoiceRef.current) startSpeechStream();
       const result = await gemma.generate({
         messages: buildLocalMessages(history, instruction),
         maxTokens: MAX_REPLY_TOKENS,
@@ -438,6 +472,29 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   }, [clearReopenTimer, feedSpeech, getGemma, scheduleListenAfterReply, startSpeechStream]);
 
   // endregion
+
+  /**
+   * End-of-speech detection. While the user talks, the recognizer keeps producing new words. When no new words
+   * arrive for END_OF_SPEECH_MS, the user has stopped, so listening ends and the turn is sent.
+   */
+  const clearEndOfSpeech = useCallback(() => {
+    if (endOfSpeechTimerRef.current) {
+      clearTimeout(endOfSpeechTimerRef.current);
+      endOfSpeechTimerRef.current = null;
+    }
+  }, []);
+
+  const armEndOfSpeech = useCallback(
+    (partial: string) => {
+      clearEndOfSpeech();
+      if (!partial.trim()) return;
+      endOfSpeechTimerRef.current = setTimeout(() => {
+        endOfSpeechTimerRef.current = null;
+        activeSpeech().stop();
+      }, END_OF_SPEECH_MS);
+    },
+    [activeSpeech, clearEndOfSpeech],
+  );
 
   const startListening = useCallback(async () => {
     if (inFlightRef.current || isBusy(stateRef.current.phase) || stateRef.current.phase === 'speaking') return;
@@ -476,13 +533,25 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       listeningSourceRef.current = 'phone';
       dispatch({ type: 'phaseChanged', phase: 'listening' });
       await speech.start(SPOKEN_LOCALE, {
-        onPartial: (partial) => dispatch({ type: 'draftChanged', draft: partial }),
+        onPartial: (partial) => {
+          dispatch({ type: 'draftChanged', draft: partial });
+          armEndOfSpeech(partial);
+        },
         onFinal: (final) => {
+          clearEndOfSpeech();
           listeningSourceRef.current = null;
           dispatch({ type: 'draftChanged', draft: '' });
-          runTurn(final);
+          // The microphone can pick up Buddy's own voice. Text that matches the reply just spoken is ignored.
+          const lastReply = [...stateRef.current.messages].reverse().find(message => message.role === 'assistant');
+          if (lastReply && isEchoOfReply(final, lastReply.text)) {
+            dispatch({ type: 'phaseChanged', phase: 'idle' });
+            scheduleListenAfterReply();
+            return;
+          }
+          runTurn(final, true);
         },
         onError: (code, message) => {
+          clearEndOfSpeech();
           listeningSourceRef.current = null;
           dispatch({ type: 'draftChanged', draft: '' });
           // A silent turn returns to idle. It never restarts the microphone on its own.
@@ -503,17 +572,56 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       listeningSourceRef.current = null;
       dispatch({ type: 'failed', message: friendlyError(error) });
     }
-  }, [clearReopenTimer, runTurn]);
+  }, [armEndOfSpeech, clearEndOfSpeech, clearReopenTimer, runTurn, scheduleListenAfterReply]);
 
   startListeningRef.current = startListening;
 
   const stopListening = useCallback(async () => {
+    clearEndOfSpeech();
     dispatch({ type: 'draftChanged', draft: '' });
     await stopSpeechInput();
     if (stateRef.current.phase === 'listening') {
       dispatch({ type: 'phaseChanged', phase: 'idle' });
     }
-  }, [stopSpeechInput]);
+  }, [clearEndOfSpeech, stopSpeechInput]);
+
+  /** Listens and passes the words to the caller, to write into the text box. Nothing is sent. */
+  const dictateStart = useCallback(
+    async (handlers: {
+      onPartial: (text: string) => void;
+      onFinal: (text: string) => void;
+      onError: (message: string) => void;
+      onEnd: () => void;
+    }) => {
+      if (inFlightRef.current || isBusy(stateRef.current.phase)) {
+        handlers.onError('Wait for the reply to finish, then speak.');
+        return;
+      }
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          handlers.onError('Microphone permission is needed for voice input.');
+          return;
+        }
+      }
+      const speech = activeSpeech();
+      if (!(await speech.isAvailable())) {
+        handlers.onError('Speech recognition is not available on this device.');
+        return;
+      }
+      await speech.start(SPOKEN_LOCALE, {
+        onPartial: handlers.onPartial,
+        onFinal: handlers.onFinal,
+        onError: (_code, message) => handlers.onError(message),
+        onEnd: handlers.onEnd,
+      });
+    },
+    [activeSpeech],
+  );
+
+  const dictateStop = useCallback(async () => {
+    await activeSpeech().stop();
+  }, [activeSpeech]);
 
   const setVoiceMode = useCallback(
     async (enabled: boolean) => {
@@ -555,7 +663,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: 'draftChanged', draft: '' });
         if (source === 'glasses') MetaWearables.stopGlassesSpeech().catch(() => undefined);
         if (text.trim()) {
-          handlersRef.current.runTurn(text.trim());
+          handlersRef.current.runTurn(text.trim(), true);
         } else {
           dispatch({ type: 'phaseChanged', phase: 'idle' });
         }
@@ -578,8 +686,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
         gemmaRef.current?.cancel().catch(() => undefined);
         stopSpeechInput();
         stopSpeaking();
-        gemmaRef.current?.release().catch(() => undefined);
-        gemmaPathRef.current = null;
+        // The model stays loaded, so the next reply does not wait for it to load again.
         dispatch({ type: 'phaseChanged', phase: 'idle' });
       }
     });
@@ -662,6 +769,8 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       clearConversation,
       clearError: () => dispatch({ type: 'errorCleared' }),
       continueReply,
+      dictateStart,
+      dictateStop,
       newChat,
       openChat,
       removeChat,
@@ -679,6 +788,8 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       newChat,
       openChat,
       removeChat,
+      dictateStart,
+      dictateStop,
     ],
   );
 

@@ -4,6 +4,7 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  Alert,
   Modal,
   Platform,
   Pressable,
@@ -72,6 +73,8 @@ export function AssistantScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { state, actions, chats, currentChatId } = useAssistant();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [dictating, setDictating] = useState(false);
+  const [liveOpen, setLiveOpen] = useState(false);
   const { state: glasses } = useGlasses();
   const { settings, update } = useSettings();
   const [draft, setDraft] = useState('');
@@ -128,6 +131,46 @@ export function AssistantScreen({ navigation }: Props) {
     actions.setVoiceMode(enabled);
   };
 
+  /** Speaks into the text box. The words are added to what is already typed, and nothing is sent. */
+  const toggleDictation = () => {
+    if (dictating) {
+      actions.dictateStop();
+      setDictating(false);
+      return;
+    }
+    const base = draft.trimEnd();
+    const join = (spoken: string) => (base ? `${base} ${spoken}` : spoken);
+    setDictating(true);
+    actions.dictateStart({
+      onPartial: text => setDraft(join(text)),
+      onFinal: text => {
+        setDraft(join(text));
+        setDictating(false);
+      },
+      onError: message => {
+        setDictating(false);
+        Alert.alert('Speech', message);
+      },
+      onEnd: () => setDictating(false),
+    });
+  };
+
+  /** Full-screen live mode: the microphone reopens after each reply, and replies are spoken. */
+  const openLive = () => {
+    if (speechDisabled) {
+      Alert.alert('Live voice', 'Turn on phone or glasses speech in Settings first.');
+      return;
+    }
+    setLiveOpen(true);
+    setVoiceMode(true);
+  };
+
+  const closeLive = () => {
+    setLiveOpen(false);
+    setVoiceMode(false);
+    actions.stopAll();
+  };
+
   const phaseLabel = state.draft
     ? `Hearing: ${state.draft}`
     : state.phase === 'processing' && state.loadProgress !== undefined
@@ -165,24 +208,11 @@ export function AssistantScreen({ navigation }: Props) {
         <CircleButton label="Open chats" glyph="≡" onPress={() => setDrawerOpen(true)} />
         <Text style={[styles.topTitle, { color: palette.text }]}>Buddy</Text>
         <View style={styles.topActions}>
-          <Pressable
-            onPress={() => navigation.navigate('Settings')}
-            accessibilityRole="button"
-            accessibilityLabel="Open settings"
-            style={[styles.textButton, { borderColor: palette.border }]}
-          >
-            <Text style={[styles.textButtonLabel, { color: palette.text }]}>Settings</Text>
-          </Pressable>
-          <CircleButton
-            label="Open glasses connection"
-            glyph="◎"
-            onPress={() => navigation.navigate('Glasses')}
-          />
+          <CircleButton label="Settings" glyph="⚙" onPress={() => navigation.navigate('Settings')} />
         </View>
       </View>
 
       <View style={styles.statusRow}>
-        <StatusPill label={`${findModel(settings.modelId).label} · on this phone`} tone="accent" />
         <StatusPill label={CONNECTION_LABEL[connection]} tone={CONNECTION_TONE[connection]} />
         {cameraOn ? <StatusPill label="● Camera on" tone="danger" /> : null}
         <View style={styles.flex} />
@@ -252,22 +282,8 @@ export function AssistantScreen({ navigation }: Props) {
       <View style={styles.footer}>
         <View style={styles.footerMeta}>
           <Text style={[styles.phase, { color: palette.mutedText }]} accessibilityLiveRegion="polite">
-            {phaseLabel}
+            {dictating ? 'Listening… speak now' : phaseLabel}
           </Text>
-          <View style={styles.voiceToggle}>
-            <Text style={[styles.voiceLabel, { color: palette.mutedText }]}>Voice mode</Text>
-            <Switch
-              value={settings.voiceMode}
-              onValueChange={setVoiceMode}
-              disabled={speechDisabled}
-              accessibilityLabel="Voice mode"
-              accessibilityHint={
-                speechDisabled
-                  ? 'Choose phone or glasses speech in Settings first'
-                  : 'When on, the assistant listens again after each reply'
-              }
-            />
-          </View>
         </View>
 
         {speaking ? (
@@ -295,16 +311,71 @@ export function AssistantScreen({ navigation }: Props) {
             accessibilityLabel="Message"
           />
           <View style={styles.composerBottom}>
-            <View style={styles.flex} />
-            <ComposerButton
-              label={composerAction.label}
-              variant={composerAction.variant}
-              disabled={'disabled' in composerAction ? composerAction.disabled : false}
-              onPress={composerAction.onPress}
+            <CircleButton
+              label="Add attachment"
+              glyph="+"
+              onPress={() =>
+                Alert.alert(
+                  'Attachments',
+                  'Photos and files cannot be sent to the on-device model yet. Type or speak your question.',
+                )
+              }
             />
+            <Pressable
+              onPress={() => navigation.navigate('Models')}
+              accessibilityRole="button"
+              accessibilityLabel={`Model ${findModel(settings.modelId).label}. Change model`}
+              style={[styles.modelChip, { borderColor: palette.border }]}
+            >
+              <Text style={[styles.modelChipLabel, { color: palette.text }]} numberOfLines={1}>
+                {findModel(settings.modelId).label.replace(/\s*\(.*\)\s*$/, '')} ▾
+              </Text>
+            </Pressable>
+            <View style={styles.flex} />
+            {hasText ? (
+              <ComposerButton label="Send" variant="send" disabled={busy} onPress={send} />
+            ) : (
+              <>
+                <CircleButton
+                  label={dictating ? 'Stop dictation' : 'Speak into the text box'}
+                  glyph={dictating ? '■' : '🎤'}
+                  onPress={toggleDictation}
+                />
+                <CircleButton label="Live voice mode" glyph="✦" onPress={openLive} />
+              </>
+            )}
           </View>
         </View>
       </View>
+      <Modal visible={liveOpen} animationType="slide" onRequestClose={closeLive}>
+        <View style={[styles.liveRoot, { backgroundColor: palette.background, paddingTop: insets.top + spacing.lg }]}>
+          <View style={styles.liveHeader}>
+            <Text style={[styles.liveTitle, { color: palette.text }]}>✦ Live</Text>
+            <CircleButton label="End live mode" glyph="✕" onPress={closeLive} />
+          </View>
+          <View style={styles.liveBody}>
+            <Text style={[styles.liveReply, { color: palette.text }]} accessibilityLiveRegion="polite">
+              {state.streamText ||
+                [...state.messages].reverse().find(message => message.role === 'assistant')?.text ||
+                'Ask Buddy anything. Speak, and Buddy answers out loud.'}
+            </Text>
+            {state.draft ? (
+              <Text style={[styles.liveDraft, { color: palette.mutedText }]}>“{state.draft}”</Text>
+            ) : null}
+          </View>
+          <Text style={[styles.phase, { color: palette.mutedText, textAlign: 'center' }]}>{phaseLabel}</Text>
+          <View style={[styles.liveControls, { paddingBottom: insets.bottom + spacing.xl }]}>
+            <CircleButton
+              label={listening ? 'Stop listening' : 'Start listening'}
+              glyph={listening ? '■' : '🎤'}
+              onPress={() => (listening ? actions.stopListening() : actions.startListening())}
+            />
+            {speaking ? (
+              <CircleButton label="Stop speaking" glyph="⏸" onPress={() => actions.stopSpeaking()} />
+            ) : null}
+          </View>
+        </View>
+      </Modal>
       <ChatDrawer
         visible={drawerOpen}
         onClose={() => setDrawerOpen(false)}
@@ -776,7 +847,7 @@ const styles = StyleSheet.create({
     minHeight: 110,
   },
   input: { fontSize: 17, maxHeight: 160, paddingTop: 0, paddingBottom: spacing.sm },
-  composerBottom: { flexDirection: 'row', alignItems: 'center' },
+  composerBottom: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   composerButton: {
     height: 44,
     minWidth: 72,
@@ -786,6 +857,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   composerButtonLabel: { fontSize: 15, fontWeight: '700' },
+  modelChip: {
+    height: 40,
+    maxWidth: 170,
+    paddingHorizontal: spacing.md,
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    justifyContent: 'center',
+  },
+  modelChipLabel: { fontSize: 14, fontWeight: '600' },
+  liveRoot: { flex: 1, paddingHorizontal: spacing.xl, gap: spacing.lg },
+  liveHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  liveTitle: { fontSize: 22, fontWeight: '700' },
+  liveBody: { flex: 1, justifyContent: 'center', gap: spacing.md },
+  liveReply: { fontSize: 22, lineHeight: 30, textAlign: 'center' },
+  liveDraft: { fontSize: 16, textAlign: 'center', fontStyle: 'italic' },
+  liveControls: { flexDirection: 'row', justifyContent: 'center', gap: spacing.xl },
   replyStack: { gap: spacing.sm },
   codeBlock: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, overflow: 'hidden' },
   codeHeader: {

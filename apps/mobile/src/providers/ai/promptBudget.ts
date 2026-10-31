@@ -13,7 +13,7 @@ export const LOCAL_CONTEXT_TOKENS = 4096;
 /** Tokens reserved for the reply. */
 export const LOCAL_REPLY_TOKENS = 220;
 /** Budget for history and the new message, after the system prompt and reply reservation. */
-export const LOCAL_HISTORY_TOKENS = 2400;
+export const LOCAL_HISTORY_TOKENS = 900;
 
 /**
  * Rough token estimate. English text is about four characters per token. Three is used here so the
