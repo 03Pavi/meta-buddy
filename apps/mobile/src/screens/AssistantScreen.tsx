@@ -77,6 +77,25 @@ export function AssistantScreen({ navigation }: Props) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [dictating, setDictating] = useState(false);
   const [liveOpen, setLiveOpen] = useState(false);
+  // Whether the chat is showing the newest text. When it is not, a button brings the reader back.
+  const [atBottom, setAtBottom] = useState(true);
+
+  const jumpToEnd = () => {
+    listRef.current?.scrollToEnd({ animated: true });
+    setAtBottom(true);
+  };
+
+  // While a reply is written, the view follows the new text, unless the reader has scrolled up.
+  useEffect(() => {
+    if (atBottom && state.streamText) listRef.current?.scrollToEnd({ animated: false });
+    // Only the streamed text drives this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.streamText]);
+
+  // Typing keeps the newest text in view.
+  useEffect(() => {
+    listRef.current?.scrollToEnd({ animated: true });
+  }, [draft]);
   const { state: glasses } = useGlasses();
   const { settings, update } = useSettings();
   const [draft, setDraft] = useState('');
@@ -267,6 +286,11 @@ export function AssistantScreen({ navigation }: Props) {
           data={listData}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.transcript}
+          onScroll={event => {
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            setAtBottom(contentSize.height - (contentOffset.y + layoutMeasurement.height) < 80);
+          }}
+          scrollEventThrottle={64}
           renderItem={({ item }) => {
             const last = state.messages[state.messages.length - 1];
             const canContinue = !busy && item.id === last?.id && !!last?.truncated;
@@ -283,6 +307,17 @@ export function AssistantScreen({ navigation }: Props) {
           }}
         />
       )}
+
+      {!atBottom && (busy || state.streamText) ? (
+        <Pressable
+          onPress={jumpToEnd}
+          accessibilityRole="button"
+          accessibilityLabel="Jump to the latest text"
+          style={[styles.jumpButton, { backgroundColor: palette.surface, borderColor: palette.border }]}
+        >
+          <Text style={[styles.jumpLabel, { color: palette.accent }]}>↓</Text>
+        </Pressable>
+      ) : null}
 
       <View style={styles.footer}>
         <View style={styles.footerMeta}>
@@ -916,6 +951,19 @@ const styles = StyleSheet.create({
   liveControls: { flexDirection: 'row', justifyContent: 'center', gap: spacing.xl },
   replyStack: { gap: spacing.sm },
   cursor: { width: 2, height: 16, borderRadius: 1, marginTop: 2 },
+  jumpButton: {
+    position: 'absolute',
+    right: spacing.lg,
+    bottom: 150,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+  },
+  jumpLabel: { fontSize: 20, fontWeight: '700' },
   codeBlock: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, overflow: 'hidden' },
   codeHeader: {
     flexDirection: 'row',
