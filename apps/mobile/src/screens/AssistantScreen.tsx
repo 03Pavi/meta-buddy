@@ -1,6 +1,8 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Animated,
+  Easing,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -268,9 +270,12 @@ export function AssistantScreen({ navigation }: Props) {
           renderItem={({ item }) => {
             const last = state.messages[state.messages.length - 1];
             const canContinue = !busy && item.id === last?.id && !!last?.truncated;
+            // The reply being written: the streaming bubble, or the reply being continued.
+            const streaming = item.id === 'streaming' || (busy && item.id === last?.id && item.role === 'assistant');
             return (
               <MessageBubble
                 message={item}
+                streaming={streaming}
                 showContinue={canContinue}
                 onContinue={() => actions.continueReply()}
               />
@@ -679,12 +684,48 @@ function markdownStyle(palette: ReturnType<typeof usePalette>) {
   } as const;
 }
 
+/**
+ * A reply that is still being written. Each new piece fades in, and a cursor blinks at the end until the reply is
+ * finished.
+ */
+function StreamingReply({ text }: { text: string }) {
+  const palette = usePalette();
+  const fade = useRef(new Animated.Value(0.5)).current;
+  const cursor = useRef(new Animated.Value(1)).current;
+
+  // Every new piece of text fades in briefly.
+  useEffect(() => {
+    fade.setValue(0.5);
+    Animated.timing(fade, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+  }, [text, fade]);
+
+  useEffect(() => {
+    const blink = Animated.loop(
+      Animated.sequence([
+        Animated.timing(cursor, { toValue: 0, duration: 450, easing: Easing.linear, useNativeDriver: true }),
+        Animated.timing(cursor, { toValue: 1, duration: 450, easing: Easing.linear, useNativeDriver: true }),
+      ]),
+    );
+    blink.start();
+    return () => blink.stop();
+  }, [cursor]);
+
+  return (
+    <Animated.View style={{ opacity: fade }}>
+      <AssistantText text={text} />
+      <Animated.View style={[styles.cursor, { backgroundColor: palette.accent, opacity: cursor }]} />
+    </Animated.View>
+  );
+}
+
 function MessageBubble({
   message,
+  streaming = false,
   showContinue = false,
   onContinue,
 }: {
   message: TranscriptMessage;
+  streaming?: boolean;
   showContinue?: boolean;
   onContinue?: () => void;
 }) {
@@ -717,7 +758,7 @@ function MessageBubble({
           </Text>
         ) : (
           // Assistant replies are markdown: headings, paragraphs, lists and code blocks.
-          <AssistantText text={message.text} />
+          streaming ? <StreamingReply text={message.text} /> : <AssistantText text={message.text} />
         )}
         {showContinue && onContinue ? (
           <Pressable
@@ -874,6 +915,7 @@ const styles = StyleSheet.create({
   liveDraft: { fontSize: 16, textAlign: 'center', fontStyle: 'italic' },
   liveControls: { flexDirection: 'row', justifyContent: 'center', gap: spacing.xl },
   replyStack: { gap: spacing.sm },
+  cursor: { width: 2, height: 16, borderRadius: 1, marginTop: 2 },
   codeBlock: { borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, overflow: 'hidden' },
   codeHeader: {
     flexDirection: 'row',
