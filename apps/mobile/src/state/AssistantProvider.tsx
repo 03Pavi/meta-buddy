@@ -4,6 +4,7 @@ import { MetaWearables, type MetaWearablesEvent } from '../../modules/meta-weara
 import { GemmaProvider } from '../providers/ai/GemmaProvider';
 import type { ChatMessage } from '../providers/types';
 import { buildLocalMessages, buildSummaryMessages, RECENT_TURNS, SUMMARY_TOKENS } from '../providers/ai/promptBudget';
+import { composeImagePrompt, pickImage, readImageText } from '../services/vision/imageText';
 import { DeviceSpeechRecognition } from '../providers/speech/DeviceSpeechRecognition';
 import { OfflineSpeechRecognition } from '../providers/speech/OfflineSpeechRecognition';
 import { findVoiceModel, voiceModelPath } from '../services/speech/voiceModels';
@@ -51,6 +52,10 @@ export interface AssistantActions {
   newChat: () => Promise<void>;
   openChat: (id: string) => Promise<void>;
   removeChat: (id: string) => Promise<void>;
+  /** Picks a photo and reads its text. Resolves to an error message, or null when the image is attached. */
+  attachImage: () => Promise<string | null>;
+  /** Drops the attached image before it is sent. */
+  removeImage: () => void;
 }
 
 interface AssistantContextValue {
@@ -59,6 +64,8 @@ interface AssistantContextValue {
   /** Saved chats, most recent first. Empty when Keep conversation history is off. */
   chats: ChatSummary[];
   currentChatId: string | null;
+  /** The image waiting to be sent with the next question, or null. */
+  attachedImage: { characters: number } | null;
 }
 
 const AssistantContext = createContext<AssistantContextValue | null>(null);
@@ -143,6 +150,9 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const summarizedCountRef = useRef(0);
   const summaryAbortRef = useRef<AbortController | null>(null);
   const summaryPromiseRef = useRef<Promise<void> | null>(null);
+  // Text read from an attached image. It is sent with the next question, then cleared.
+  const attachedImageRef = useRef<string | null>(null);
+  const [attachedImage, setAttachedImage] = useState<{ characters: number } | null>(null);
   const speechOutputRef = useRef<{ utteranceId: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   // The reply being spoken as it is written: how much of it has been queued, and whether speech has started.
   const speechStreamRef = useRef<{ utteranceId: string; index: number; spoken: boolean } | null>(null);
@@ -413,6 +423,12 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
         // Capture history before this turn's messages are added. Turns already in the summary are left out.
         const history = dialogOf(stateRef.current.messages).slice(summarizedCountRef.current);
 
+        // An attached image is read by the model together with this question, and is used only once.
+        const imageText = attachedImageRef.current;
+        attachedImageRef.current = null;
+        setAttachedImage(null);
+        const prompt = imageText === null ? text : composeImagePrompt(imageText, text);
+
         dispatch({ type: 'messageAdded', message: makeMessage('user', text) });
         dispatch({ type: 'requestStarted', requestId: text, withImage: false, text });
         if (needsVisualContext(text)) {
@@ -427,7 +443,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
         await gemma.prepare((fraction) => dispatch({ type: 'loadProgressChanged', fraction }));
         dispatch({ type: 'loadProgressChanged', fraction: undefined });
 
-        const messages = buildLocalMessages(history, text, undefined, undefined, summaryRef.current);
+        const messages = buildLocalMessages(history, prompt, undefined, undefined, summaryRef.current);
         // Only a question asked by voice gets a spoken reply. Typed questions get text only.
         if (fromVoice) startSpeechStream();
         const result = await gemma.generate({
@@ -784,6 +800,8 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const newChat = useCallback(async () => {
     await stopAll();
     resetSummary();
+    attachedImageRef.current = null;
+    setAttachedImage(null);
     chatIdRef.current = null;
     setCurrentChatId(null);
     dispatch({ type: 'conversationCleared' });
@@ -825,6 +843,25 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     }
   }, [stopAll, refreshChats, resetSummary]);
 
+  const attachImage = useCallback(async (): Promise<string | null> => {
+    try {
+      const uri = await pickImage();
+      if (!uri) return null;
+      const text = await readImageText(uri);
+      if (!text) return 'No text was found in that image. Try a clearer photo.';
+      attachedImageRef.current = text;
+      setAttachedImage({ characters: text.length });
+      return null;
+    } catch (error) {
+      return friendlyError(error);
+    }
+  }, []);
+
+  const removeImage = useCallback(() => {
+    attachedImageRef.current = null;
+    setAttachedImage(null);
+  }, []);
+
   const actions = useMemo<AssistantActions>(
     () => ({
       sendText: (text: string) => {
@@ -845,6 +882,8 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       newChat,
       openChat,
       removeChat,
+      attachImage,
+      removeImage,
     }),
     [
       retry,
@@ -859,14 +898,16 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       newChat,
       openChat,
       removeChat,
+      attachImage,
+      removeImage,
       dictateStart,
       dictateStop,
     ],
   );
 
   const value = useMemo(
-    () => ({ state, actions, chats, currentChatId }),
-    [state, actions, chats, currentChatId],
+    () => ({ state, actions, chats, currentChatId, attachedImage }),
+    [state, actions, chats, currentChatId, attachedImage],
   );
   return <AssistantContext.Provider value={value}>{children}</AssistantContext.Provider>;
 }

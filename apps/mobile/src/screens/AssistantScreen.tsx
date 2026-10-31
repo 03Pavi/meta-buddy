@@ -74,7 +74,7 @@ const SUGGESTIONS = [
 export function AssistantScreen({ navigation }: Props) {
   const palette = usePalette();
   const insets = useSafeAreaInsets();
-  const { state, actions, chats, currentChatId } = useAssistant();
+  const { state, actions, chats, currentChatId, attachedImage } = useAssistant();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [dictating, setDictating] = useState(false);
   const [liveOpen, setLiveOpen] = useState(false);
@@ -341,6 +341,16 @@ export function AssistantScreen({ navigation }: Props) {
         ) : null}
 
         <View style={[styles.composer, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+          {attachedImage ? (
+            <View style={styles.attachmentRow}>
+              <Text style={[styles.attachmentText, { color: palette.mutedText }]}>
+                Image attached · {attachedImage.characters} characters read
+              </Text>
+              <Pressable onPress={actions.removeImage} accessibilityRole="button" accessibilityLabel="Remove image">
+                <Text style={[styles.attachmentRemove, { color: palette.accent }]}>Remove</Text>
+              </Pressable>
+            </View>
+          ) : null}
           <TextInput
             value={draft}
             onChangeText={setDraft}
@@ -355,14 +365,12 @@ export function AssistantScreen({ navigation }: Props) {
           />
           <View style={styles.composerBottom}>
             <CircleButton
-              label="Add attachment"
+              label="Add image"
               glyph="+"
-              onPress={() =>
-                Alert.alert(
-                  'Attachments',
-                  'Photos and files cannot be sent to the on-device model yet. Type or speak your question.',
-                )
-              }
+              onPress={async () => {
+                const error = await actions.attachImage();
+                if (error) Alert.alert('Image', error);
+              }}
             />
             <Pressable
               onPress={() => navigation.navigate('Models')}
@@ -929,6 +937,9 @@ const styles = StyleSheet.create({
   },
   input: { fontSize: 17, maxHeight: 160, paddingTop: 0, paddingBottom: spacing.sm },
   composerBottom: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  attachmentRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  attachmentText: { fontSize: 13, flexShrink: 1 },
+  attachmentRemove: { fontSize: 14, fontWeight: '600' },
   composerButton: {
     height: 44,
     minWidth: 72,
