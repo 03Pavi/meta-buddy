@@ -35,6 +35,14 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      # The native build needs CMake 3.31.6 and Ninja. Gradle looks for them on the PATH, so install them from PyPI.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CMake and Ninja
+        run: python -m pip install cmake==3.31.6 ninja
+
       # Accept the Android SDK license by writing its known hash. Gradle then installs the platform, NDK and CMake
       # the project asks for, so no separate sdkmanager step is needed.
       - name: Accept the Android SDK license
