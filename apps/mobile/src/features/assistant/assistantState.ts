@@ -15,6 +15,8 @@ export interface TranscriptMessage {
   withImage?: boolean;
   /** True when an assistant reply stopped at the length limit, so a Continue button is shown. */
   truncated?: boolean;
+  /** File URI of a picture the user attached and sent. Shown in the chat with the message. */
+  imageUri?: string;
 }
 
 export interface AssistantState {

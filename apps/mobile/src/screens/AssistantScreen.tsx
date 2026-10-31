@@ -4,6 +4,7 @@ import {
   Animated,
   Easing,
   FlatList,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Alert,
@@ -126,7 +127,8 @@ export function AssistantScreen({ navigation }: Props) {
     glasses.cameraState === 'STARTING';
   const connection = connectionSummary(glasses);
   const speechDisabled = settings.speechInput === 'text';
-  const hasText = draft.trim().length > 0;
+  // Send is available for typed text, or for an attached image with or without a question.
+  const hasText = draft.trim().length > 0 || attachedImage !== null;
   // While the model writes, the reply so far is shown as a last message that grows as each token arrives.
   const listData: TranscriptMessage[] = state.streamText
     ? [...state.messages, { id: 'streaming', role: 'assistant', text: state.streamText, createdAt: Date.now() }]
@@ -140,7 +142,7 @@ export function AssistantScreen({ navigation }: Props) {
 
   const send = () => {
     const text = draft.trim();
-    if (!text || busy) return;
+    if ((!text && !attachedImage) || busy) return;
     setDraft('');
     actions.sendText(text);
   };
@@ -343,11 +345,13 @@ export function AssistantScreen({ navigation }: Props) {
         <View style={[styles.composer, { backgroundColor: palette.surface, borderColor: palette.border }]}>
           {attachedImage ? (
             <View style={styles.attachmentRow}>
+              <Image source={{ uri: attachedImage.uri }} style={styles.attachmentThumb} resizeMode="cover" accessibilityLabel="Attached image preview" />
               <Text style={[styles.attachmentText, { color: palette.mutedText }]}>
-                Image attached · {attachedImage.characters} characters read
+                Image ready · read when you send
               </Text>
+              <View style={styles.flex} />
               <Pressable onPress={actions.removeImage} accessibilityRole="button" accessibilityLabel="Remove image">
-                <Text style={[styles.attachmentRemove, { color: palette.accent }]}>Remove</Text>
+                <Text style={[styles.attachmentRemove, { color: palette.accent }]}>✕</Text>
               </Pressable>
             </View>
           ) : null}
@@ -793,6 +797,14 @@ function MessageBubble({
         ]}
         accessibilityLabel={`${message.role}: ${message.text}`}
       >
+        {message.imageUri ? (
+          <Image
+            source={{ uri: message.imageUri }}
+            style={styles.messageImage}
+            resizeMode="contain"
+            accessibilityLabel="Attached image"
+          />
+        ) : null}
         {isUser || isSystem ? (
           <Text
             style={[
@@ -937,9 +949,11 @@ const styles = StyleSheet.create({
   },
   input: { fontSize: 17, maxHeight: 160, paddingTop: 0, paddingBottom: spacing.sm },
   composerBottom: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  attachmentRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  attachmentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  attachmentThumb: { width: 64, height: 64, borderRadius: 10 },
   attachmentText: { fontSize: 13, flexShrink: 1 },
   attachmentRemove: { fontSize: 14, fontWeight: '600' },
+  messageImage: { width: 240, height: 240, borderRadius: 12, marginBottom: spacing.sm },
   composerButton: {
     height: 44,
     minWidth: 72,

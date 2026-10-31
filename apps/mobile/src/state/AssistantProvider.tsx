@@ -65,7 +65,7 @@ interface AssistantContextValue {
   chats: ChatSummary[];
   currentChatId: string | null;
   /** The image waiting to be sent with the next question, or null. */
-  attachedImage: { characters: number } | null;
+  attachedImage: { uri: string } | null;
 }
 
 const AssistantContext = createContext<AssistantContextValue | null>(null);
@@ -150,9 +150,9 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const summarizedCountRef = useRef(0);
   const summaryAbortRef = useRef<AbortController | null>(null);
   const summaryPromiseRef = useRef<Promise<void> | null>(null);
-  // Text read from an attached image. It is sent with the next question, then cleared.
-  const attachedImageRef = useRef<string | null>(null);
-  const [attachedImage, setAttachedImage] = useState<{ characters: number } | null>(null);
+  // The attached image and the text read from it. Both are sent with the next question, then cleared.
+  const attachedImageRef = useRef<{ uri: string } | null>(null);
+  const [attachedImage, setAttachedImage] = useState<{ uri: string } | null>(null);
   const speechOutputRef = useRef<{ utteranceId: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   // The reply being spoken as it is written: how much of it has been queued, and whether speech has started.
   const speechStreamRef = useRef<{ utteranceId: string; index: number; spoken: boolean } | null>(null);
@@ -424,12 +424,19 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
         const history = dialogOf(stateRef.current.messages).slice(summarizedCountRef.current);
 
         // An attached image is read by the model together with this question, and is used only once.
-        const imageText = attachedImageRef.current;
+        const attached = attachedImageRef.current;
         attachedImageRef.current = null;
         setAttachedImage(null);
+        // The picture is read with the on-phone OCR model only now, after the user has sent it. The model
+        // receives the text and decides how to reply to this media.
+        const imageText = attached === null ? null : await readImageText(attached.uri);
         const prompt = imageText === null ? text : composeImagePrompt(imageText, text);
 
-        dispatch({ type: 'messageAdded', message: makeMessage('user', text) });
+        const userMessage = makeMessage('user', text || 'Sent an image');
+        dispatch({
+          type: 'messageAdded',
+          message: attached ? { ...userMessage, imageUri: attached.uri } : userMessage,
+        });
         dispatch({ type: 'requestStarted', requestId: text, withImage: false, text });
         if (needsVisualContext(text)) {
           dispatch({ type: 'messageAdded', message: makeMessage('system', NOT_TEXT_ONLY_NOTE) });
@@ -847,10 +854,9 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     try {
       const uri = await pickImage();
       if (!uri) return null;
-      const text = await readImageText(uri);
-      if (!text) return 'No text was found in that image. Try a clearer photo.';
-      attachedImageRef.current = text;
-      setAttachedImage({ characters: text.length });
+      // Only the picture is kept here. Its text is read when the user sends it, so attaching stays instant.
+      attachedImageRef.current = { uri };
+      setAttachedImage({ uri });
       return null;
     } catch (error) {
       return friendlyError(error);
@@ -866,7 +872,8 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
     () => ({
       sendText: (text: string) => {
         const trimmed = text.trim();
-        return trimmed ? runTurn(trimmed) : Promise.resolve();
+        const hasImage = attachedImageRef.current !== null;
+        return trimmed || hasImage ? runTurn(trimmed) : Promise.resolve();
       },
       retry,
       startListening,
