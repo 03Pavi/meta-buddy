@@ -28,6 +28,7 @@ import {
 } from '../features/assistant/assistantState';
 import { connectionSummary } from '../features/glasses/glassesState';
 import type { ChatSummary } from '../services/storage/chatStore';
+import { useChatModelReady } from '../hooks/useChatModelReady';
 import { findModel } from '../services/models/catalog';
 import { useAssistant } from '../state/AssistantProvider';
 import { useGlasses } from '../state/GlassesProvider';
@@ -94,6 +95,7 @@ export function AssistantScreen({ navigation }: Props) {
 
   const { state: glasses } = useGlasses();
   const { settings, update } = useSettings();
+  const chatModelReady = useChatModelReady(settings.modelId);
   const [draft, setDraft] = useState('');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const listRef = useRef<FlatList<TranscriptMessage>>(null);
@@ -369,7 +371,9 @@ export function AssistantScreen({ navigation }: Props) {
               style={[styles.modelChip, { borderColor: palette.border }]}
             >
               <Text style={[styles.modelChipLabel, { color: palette.text }]} numberOfLines={1}>
-                {findModel(settings.modelId).label.replace(/\s*\(.*\)\s*$/, '')} ▾
+                {chatModelReady === false
+                  ? 'Choose model'
+                  : `${findModel(settings.modelId).label.replace(/\s*\(.*\)\s*$/, '')} ▾`}
               </Text>
             </Pressable>
             <View style={styles.flex} />

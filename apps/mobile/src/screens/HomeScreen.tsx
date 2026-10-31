@@ -6,6 +6,7 @@ import { BottomDock, DOCK_SPACE } from '../components/BottomDock';
 import { Text } from '../components/AppText';
 import { fonts, palette } from '../components/theme';
 import { connectionSummary } from '../features/glasses/glassesState';
+import { useChatModelReady } from '../hooks/useChatModelReady';
 import { findModel } from '../services/models/catalog';
 import type { RootStackParamList } from '../navigation/types';
 import { useGlasses } from '../state/GlassesProvider';
@@ -52,6 +53,7 @@ export function HomeScreen({ navigation }: Props) {
   const { settings } = useSettings();
   const { state: glasses } = useGlasses();
   const model = splitModelLabel(findModel(settings.modelId).label);
+  const chatModelReady = useChatModelReady(settings.modelId);
   const connection = connectionSummary(glasses);
   const glassesSynced = connection === 'connected';
 
@@ -135,17 +137,25 @@ export function HomeScreen({ navigation }: Props) {
           style={styles.modelPill}
         >
           <View style={styles.modelDot} />
-          <Text style={styles.modelName} numberOfLines={1}>
-            {model.name}
-          </Text>
-          {model.quant ? (
-            <View style={styles.quantChip}>
-              <Text style={styles.quantText}>{model.quant}</Text>
-            </View>
-          ) : null}
-          <View style={styles.edgeChip}>
-            <Text style={styles.edgeText}>EDGE</Text>
-          </View>
+          {chatModelReady === false ? (
+            <Text style={styles.modelName} numberOfLines={1}>
+              Choose model
+            </Text>
+          ) : (
+            <>
+              <Text style={styles.modelName} numberOfLines={1}>
+                {model.name}
+              </Text>
+              {model.quant ? (
+                <View style={styles.quantChip}>
+                  <Text style={styles.quantText}>{model.quant}</Text>
+                </View>
+              ) : null}
+              <View style={styles.edgeChip}>
+                <Text style={styles.edgeText}>EDGE</Text>
+              </View>
+            </>
+          )}
           <Text style={styles.chevron}>›</Text>
         </Pressable>
       </Animated.View>
