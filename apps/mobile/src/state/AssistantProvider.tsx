@@ -3,7 +3,7 @@ import { AppState, PermissionsAndroid, Platform } from 'react-native';
 import { MetaWearables, type MetaWearablesEvent } from '../../modules/meta-wearables/src';
 import { GemmaProvider } from '../providers/ai/GemmaProvider';
 import type { ChatMessage } from '../providers/types';
-import { buildLocalMessages } from '../providers/ai/promptBudget';
+import { buildLocalMessages, buildSummaryMessages, RECENT_TURNS, SUMMARY_TOKENS } from '../providers/ai/promptBudget';
 import { DeviceSpeechRecognition } from '../providers/speech/DeviceSpeechRecognition';
 import { OfflineSpeechRecognition } from '../providers/speech/OfflineSpeechRecognition';
 import { findVoiceModel, voiceModelPath } from '../services/speech/voiceModels';
@@ -73,6 +73,13 @@ const END_OF_SPEECH_MS = 1200;
 const MAX_REPLY_TOKENS = 220;
 const NOT_TEXT_ONLY_NOTE = 'Gemma on this phone is text-only, so it cannot see the camera. Ask without the camera.';
 
+/** The user and assistant turns of a transcript, in the form the model reads. System notes are left out. */
+function dialogOf(messages: { role: string; text: string }[]): ChatMessage[] {
+  return messages
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => ({ role: m.role as 'user' | 'assistant', content: m.text }));
+}
+
 function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -131,6 +138,11 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   // Synchronous guard against double submission. React state updates are too slow to rely on for this.
   const inFlightRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  // Rolling summary of the older turns. The model sees it instead of the full text of those turns.
+  const summaryRef = useRef('');
+  const summarizedCountRef = useRef(0);
+  const summaryAbortRef = useRef<AbortController | null>(null);
+  const summaryPromiseRef = useRef<Promise<void> | null>(null);
   const speechOutputRef = useRef<{ utteranceId: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   // The reply being spoken as it is written: how much of it has been queued, and whether speech has started.
   const speechStreamRef = useRef<{ utteranceId: string; index: number; spoken: boolean } | null>(null);
@@ -191,6 +203,8 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       const messages = await loadChat(list[0].id);
       if (messages.length === 0) return;
       openingChatRef.current = true;
+      summaryRef.current = '';
+      summarizedCountRef.current = 0;
       chatIdRef.current = list[0].id;
       setCurrentChatId(list[0].id);
       dispatch({ type: 'transcriptLoaded', messages });
@@ -334,23 +348,70 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
 
   // region Conversation turn
 
+  const resetSummary = useCallback(() => {
+    summaryRef.current = '';
+    summarizedCountRef.current = 0;
+  }, []);
+
+  /**
+   * Folds the older turns that are not yet summarized into the rolling summary, keeping the most recent turns
+   * word for word. Runs after a reply, when the phone is idle. A new question stops it first.
+   */
+  const summarizeOlderTurns = useCallback(async () => {
+    const dialog = dialogOf(stateRef.current.messages);
+    const end = dialog.length - RECENT_TURNS;
+    if (end <= summarizedCountRef.current) return;
+    if (inFlightRef.current || isBusy(stateRef.current.phase)) return;
+
+    const older = dialog.slice(summarizedCountRef.current, end);
+    inFlightRef.current = true;
+    const controller = new AbortController();
+    summaryAbortRef.current = controller;
+    const run = (async () => {
+      try {
+        const gemma = await getGemma();
+        const result = await gemma.generate({
+          messages: buildSummaryMessages(summaryRef.current, older),
+          maxTokens: SUMMARY_TOKENS,
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted && result.text.trim()) {
+          summaryRef.current = result.text.trim();
+          summarizedCountRef.current = end;
+        }
+      } catch {
+        // Keep the previous summary. The older turns are summarized again next time.
+      } finally {
+        if (summaryAbortRef.current === controller) summaryAbortRef.current = null;
+        inFlightRef.current = false;
+      }
+    })();
+    summaryPromiseRef.current = run;
+    await run;
+    summaryPromiseRef.current = null;
+  }, [getGemma]);
+
   const runTurn = useCallback(
     async (text: string, fromVoice = false) => {
+      // A summary in progress yields to the question, so it is stopped and finished before the turn starts.
+      if (summaryPromiseRef.current) {
+        summaryAbortRef.current?.abort();
+        await summaryPromiseRef.current;
+      }
       if (inFlightRef.current || isBusy(stateRef.current.phase)) return;
       inFlightRef.current = true;
       lastTurnVoiceRef.current = fromVoice;
       const controller = new AbortController();
       abortRef.current = controller;
+      let answered = false;
 
       try {
         await stopSpeechInput();
         if (stateRef.current.phase === 'speaking') await stopSpeaking();
         clearReopenTimer();
 
-        // Capture history before this turn's messages are added.
-        const history = stateRef.current.messages
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.text }));
+        // Capture history before this turn's messages are added. Turns already in the summary are left out.
+        const history = dialogOf(stateRef.current.messages).slice(summarizedCountRef.current);
 
         dispatch({ type: 'messageAdded', message: makeMessage('user', text) });
         dispatch({ type: 'requestStarted', requestId: text, withImage: false, text });
@@ -366,7 +427,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
         await gemma.prepare((fraction) => dispatch({ type: 'loadProgressChanged', fraction }));
         dispatch({ type: 'loadProgressChanged', fraction: undefined });
 
-        const messages = buildLocalMessages(history, text);
+        const messages = buildLocalMessages(history, text, undefined, undefined, summaryRef.current);
         // Only a question asked by voice gets a spoken reply. Typed questions get text only.
         if (fromVoice) startSpeechStream();
         const result = await gemma.generate({
@@ -393,6 +454,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
           dispatch({ type: 'phaseChanged', phase: 'idle' });
           scheduleListenAfterReply();
         }
+        answered = true;
       } catch (error) {
         speechStreamRef.current = null;
         if (controller.signal.aborted) {
@@ -403,9 +465,10 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       } finally {
         if (abortRef.current === controller) abortRef.current = null;
         inFlightRef.current = false;
+        if (answered) void summarizeOlderTurns();
       }
     },
-    [clearReopenTimer, feedSpeech, getGemma, scheduleListenAfterReply, startSpeechStream, stopSpeechInput, stopSpeaking],
+    [clearReopenTimer, feedSpeech, getGemma, scheduleListenAfterReply, startSpeechStream, stopSpeechInput, stopSpeaking, summarizeOlderTurns],
   );
 
   const retry = useCallback(async () => {
@@ -720,21 +783,23 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
 
   const newChat = useCallback(async () => {
     await stopAll();
+    resetSummary();
     chatIdRef.current = null;
     setCurrentChatId(null);
     dispatch({ type: 'conversationCleared' });
-  }, [stopAll]);
+  }, [stopAll, resetSummary]);
 
   const openChat = useCallback(
     async (id: string) => {
       await stopAll();
+      resetSummary();
       const messages = await loadChat(id);
       chatIdRef.current = id;
       setCurrentChatId(id);
       openingChatRef.current = true;
       dispatch({ type: 'transcriptLoaded', messages });
     },
-    [stopAll],
+    [stopAll, resetSummary],
   );
 
   const removeChat = useCallback(
@@ -749,6 +814,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   // Clear empties the open chat and removes it from the saved list.
   const clearConversation = useCallback(async () => {
     await stopAll();
+    resetSummary();
     const id = chatIdRef.current;
     chatIdRef.current = null;
     setCurrentChatId(null);
@@ -757,7 +823,7 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       await deleteChat(id);
       await refreshChats();
     }
-  }, [stopAll, refreshChats]);
+  }, [stopAll, refreshChats, resetSummary]);
 
   const actions = useMemo<AssistantActions>(
     () => ({

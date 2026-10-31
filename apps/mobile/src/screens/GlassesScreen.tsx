@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Text } from '../components/AppText';
 import { Button, Card, KeyValueRow, Notice } from '../components/ui';
@@ -11,6 +11,10 @@ import {
 import { isGlassesModuleAvailable } from '../../modules/meta-wearables/src';
 import { useGlasses } from '../state/GlassesProvider';
 import type { RootStackParamList } from '../navigation/types';
+import {
+  hasNearbyDevicesAccess,
+  requestNearbyDevicesAccess,
+} from '../services/permissions/nearbyDevices';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Glasses'>;
 
@@ -56,9 +60,26 @@ export function GlassesScreen(_props: Props) {
   const canConnect = state.registration === 'REGISTERED' && !state.busy;
   const [scanning, setScanning] = useState(false);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
+  const [nearbyGranted, setNearbyGranted] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    hasNearbyDevicesAccess().then(setNearbyGranted);
+  }, []);
+
+  const requestNearby = async () => {
+    const granted = await requestNearbyDevicesAccess();
+    setNearbyGranted(granted);
+    return granted;
+  };
 
   const scanForGlasses = async () => {
     setScanning(true);
+    setScanMessage('Asking for Nearby devices access…');
+    if (!(await requestNearby())) {
+      setScanning(false);
+      setScanMessage('Allow Nearby devices so Buddy can find your glasses, then scan again.');
+      return;
+    }
     setScanMessage('Searching for nearby glasses…');
     const result = await actions.scan();
     setScanning(false);
@@ -99,7 +120,12 @@ export function GlassesScreen(_props: Props) {
           onPress={scanForGlasses}
           disabled={scanning || !isGlassesModuleAvailable}
         />
-        {scanMessage ? (
+        {scanning ? (
+          <View style={styles.scanningRow}>
+            <ActivityIndicator color={palette.accent} />
+            <Text style={[styles.scanHint, { color: palette.text }]}>{scanMessage}</Text>
+          </View>
+        ) : scanMessage ? (
           <Text style={[styles.scanHint, { color: palette.text }]} accessibilityLiveRegion="polite">
             {scanMessage}
           </Text>
@@ -157,6 +183,18 @@ export function GlassesScreen(_props: Props) {
       </Card>
 
       <Card title="Permissions">
+        <View style={styles.permissionRow}>
+          <KeyValueRow
+            label="Nearby devices"
+            value={nearbyGranted === null ? 'Not checked' : nearbyGranted ? 'Granted' : 'Not granted'}
+            tone={nearbyGranted ? 'success' : 'neutral'}
+          />
+          <Button
+            label="Request nearby devices"
+            onPress={requestNearby}
+            disabled={state.busy || nearbyGranted === true}
+          />
+        </View>
         <PermissionRow
           permission="camera"
           status={state.permissions.camera}
@@ -265,4 +303,5 @@ const styles = StyleSheet.create({
   footnote: { fontSize: 13, lineHeight: 18 },
   buttons: { gap: spacing.sm },
   permissionRow: { gap: spacing.sm },
+  scanningRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
 });

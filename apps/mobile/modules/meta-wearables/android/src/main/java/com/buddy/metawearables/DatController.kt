@@ -70,6 +70,7 @@ class DatController(
   private var lastFrameEventAtMs = 0L
 
   private var glassesSpeech: Speech? = null
+  private var glassesSpeechOwner: Any? = null
   private var glassesSpeechJobs = mutableListOf<Job>()
 
   private var invocationStream: VoiceInvocationsStream? = null
@@ -441,16 +442,27 @@ class DatController(
         promise.reject("microphone_permission_denied", "Microphone permission has not been granted in the Meta AI app")
         return@launch
       }
+      // The session keeps its speech capability after stop(), so reuse it instead of adding another.
+      val existing = glassesSpeech
+      if (existing != null && glassesSpeechOwner === current) {
+        startGlassesSpeechOn(existing, promise)
+        return@launch
+      }
       current.addSpeech(SpeechConfiguration())
         .onSuccess { speech ->
           glassesSpeech = speech
-          observeGlassesSpeech(speech)
-          speech.start()
-            .onSuccess { promise.resolve(snapshot().toWritable()) }
-            .onFailure { error, _ -> promise.reject("speech_start_failed", error.description) }
+          glassesSpeechOwner = current
+          startGlassesSpeechOn(speech, promise)
         }
         .onFailure { error, _ -> promise.reject("speech_add_failed", error.description) }
     }
+  }
+
+  private fun startGlassesSpeechOn(speech: Speech, promise: Promise) {
+    observeGlassesSpeech(speech)
+    speech.start()
+      .onSuccess { promise.resolve(snapshot().toWritable()) }
+      .onFailure { error, _ -> promise.reject("speech_start_failed", error.description) }
   }
 
   private fun observeGlassesSpeech(speech: Speech) {
@@ -480,7 +492,6 @@ class DatController(
     glassesSpeechJobs.forEach { it.cancel() }
     glassesSpeechJobs.clear()
     glassesSpeech?.stop()
-    glassesSpeech = null
   }
 
   // endregion

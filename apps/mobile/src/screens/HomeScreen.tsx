@@ -48,6 +48,19 @@ function splitModelLabel(label: string): { name: string; quant: string | null } 
 }
 
 /** Home: a status header, the on-device model, one large orb to start talking, and two action cards. */
+/** Two lenses joined by a bridge, drawn with views so no icon package is needed. */
+function GlassesIcon({ color, size }: { color: string; size: number }) {
+  const lens = size * 0.45;
+  const lensStyle = { width: lens, height: lens, borderRadius: lens / 2, borderWidth: 2, borderColor: color };
+  return (
+    <View style={{ width: size, height: lens, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+      <View style={lensStyle} />
+      <View style={{ width: size - lens * 2, height: 2, backgroundColor: color }} />
+      <View style={lensStyle} />
+    </View>
+  );
+}
+
 export function HomeScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { settings } = useSettings();
@@ -124,7 +137,7 @@ export function HomeScreen({ navigation }: Props) {
           accessibilityLabel={`Glasses ${GLASSES_LABEL[connection]}`}
           style={styles.glassesPill}
         >
-          <Text style={styles.glassesGlyph}>◎</Text>
+          <GlassesIcon color={HOME.text} size={22} />
           <View style={[styles.statusDot, { backgroundColor: glassesSynced ? HOME.accent : HOME.warning }]} />
         </Pressable>
       </Animated.View>
@@ -207,7 +220,7 @@ export function HomeScreen({ navigation }: Props) {
             style={styles.card}
           >
             <View style={styles.cardIcon}>
-              <Text style={styles.glassesGlyph}>◎</Text>
+              <GlassesIcon color={HOME.text} size={28} />
             </View>
             <View style={styles.cardText}>
               <View style={styles.titleRow}>
@@ -249,7 +262,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: HOME.border,
   },
-  glassesGlyph: { fontSize: 17, color: HOME.text },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   modelPill: {
     flexDirection: 'row',

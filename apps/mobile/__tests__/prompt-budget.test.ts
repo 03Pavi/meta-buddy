@@ -1,5 +1,6 @@
 import {
   buildLocalMessages,
+  buildSummaryMessages,
   estimateTokens,
   BUDDY_SYSTEM_PROMPT,
 } from '../src/providers/ai/promptBudget';
@@ -54,7 +55,31 @@ describe('buildLocalMessages', () => {
     expect(messages.filter((m) => m.role === 'system')).toHaveLength(1);
   });
 
+  it('adds the rolling summary to the system prompt', () => {
+    const messages = buildLocalMessages([], 'What did I ask first?', undefined, undefined, 'The user asked about trains.');
+    expect(messages[0].content).toContain(BUDDY_SYSTEM_PROMPT);
+    expect(messages[0].content).toContain('Earlier in this conversation: The user asked about trains.');
+  });
+
+  it('leaves the system prompt unchanged when there is no summary', () => {
+    const messages = buildLocalMessages([], 'Hello');
+    expect(messages[0].content).toBe(BUDDY_SYSTEM_PROMPT);
+  });
+
   it('estimates tokens conservatively', () => {
     expect(estimateTokens('abcdefghi')).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('buildSummaryMessages', () => {
+  it('asks for a summary of the older turns, including the earlier summary', () => {
+    const messages = buildSummaryMessages('Talked about trains.', [
+      { role: 'user', content: 'Which platform?' },
+      { role: 'assistant', content: 'Platform 4.' },
+    ]);
+    expect(messages[0].role).toBe('system');
+    expect(messages[1].content).toContain('Summary so far: Talked about trains.');
+    expect(messages[1].content).toContain('User: Which platform?');
+    expect(messages[1].content).toContain('Buddy: Platform 4.');
   });
 });
